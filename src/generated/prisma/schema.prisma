@@ -1,0 +1,352 @@
+// DaamKoto — Bangladesh Hardware Price & Stock Aggregator
+// Prisma schema (PostgreSQL / Supabase)
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────────────
+
+enum Availability {
+  IN_STOCK
+  OUT_OF_STOCK
+  LOW_STOCK
+  PRE_ORDER
+  COMING_SOON
+  UNKNOWN
+}
+
+enum MatchingStatus {
+  MATCHED
+  PENDING_REVIEW
+  UNMATCHED
+}
+
+enum DataSourceType {
+  OFFICIAL_API
+  AFFILIATE_API
+  PUBLIC_FEED
+  MERCHANT_FEED
+  PERMITTED_SCRAPE
+  MANUAL_IMPORT
+  MOCK
+}
+
+enum ScraperRunStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+  PARTIAL
+}
+
+enum AnalyticsEventType {
+  SEARCH
+  PRODUCT_VIEW
+  COMPARE
+  RETAILER_CLICK
+  CATEGORY_VIEW
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  EDITOR
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// CATALOG
+// ─────────────────────────────────────────────────────────────────────────
+
+model Brand {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  logoUrl   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+
+  @@index([slug])
+}
+
+model Category {
+  id       String     @id @default(cuid())
+  name     String
+  nameBn   String? // Bengali display name
+  slug     String     @unique
+  parentId String?
+  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryHierarchy")
+
+  description String?
+  iconName    String? // lucide icon name for category cards
+  sortOrder   Int     @default(0)
+  isActive    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+
+  @@index([slug])
+  @@index([parentId])
+}
+
+model Product {
+  id         String   @id @default(cuid())
+  name       String
+  slug       String   @unique
+  brandId    String?
+  brand      Brand?   @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  model       String?
+  sku         String?
+  description String? @db.Text
+  imageUrl    String?
+
+  // Free-form spec sheet, e.g. { "VRAM": "12GB", "Memory Bus": "192-bit", "Architecture": "Blackwell" }
+  specifications Json?
+
+  // Denormalized pricing snapshot, refreshed whenever listings change.
+  // Kept on the product row so list/search pages avoid aggregating on every request.
+  lowestListedPrice      Decimal?  @db.Decimal(12, 2)
+  lowestAvailablePrice   Decimal?  @db.Decimal(12, 2)
+  highestPrice           Decimal?  @db.Decimal(12, 2)
+  averagePrice           Decimal?  @db.Decimal(12, 2)
+  totalRetailerCount     Int       @default(0)
+  availableRetailerCount Int       @default(0)
+  priceUpdatedAt         DateTime?
+
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  listings       ProductListing[]
+  watchlistItems WatchlistItem[]
+  priceAlerts    PriceAlert[]
+
+  @@index([slug])
+  @@index([name])
+  @@index([brandId])
+  @@index([categoryId])
+  @@index([lowestAvailablePrice])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// RETAILERS & LISTINGS
+// ─────────────────────────────────────────────────────────────────────────
+
+model Retailer {
+  id         String  @id @default(cuid())
+  name       String
+  slug       String  @unique
+  websiteUrl String
+  logoUrl    String?
+  isActive   Boolean @default(true)
+
+  // Which DataSource (adapter config) currently powers this retailer's listings
+  dataSourceId String?
+  dataSource   DataSource? @relation(fields: [dataSourceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  listings ProductListing[]
+
+  @@index([slug])
+}
+
+model ProductListing {
+  id         String   @id @default(cuid())
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  retailerId String
+  retailer   Retailer @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+
+  externalProductId String? // retailer's internal SKU/id, if known
+  externalUrl       String // canonical product page on the retailer's site
+
+  price         Decimal  @db.Decimal(12, 2)
+  previousPrice Decimal? @db.Decimal(12, 2)
+  currency      String   @default("BDT")
+
+  availability  Availability @default(UNKNOWN)
+  stockQuantity Int?
+
+  title       String // raw retailer listing title, pre-normalization
+  description String? @db.Text
+  imageUrl    String?
+
+  // Product-matching metadata
+  matchingStatus  MatchingStatus @default(PENDING_REVIEW)
+  matchConfidence Float? // 0..1
+
+  lastCheckedAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  priceHistory PriceHistory[]
+
+  @@unique([retailerId, externalUrl])
+  @@index([productId])
+  @@index([retailerId])
+  @@index([price])
+  @@index([availability])
+  @@index([lastCheckedAt])
+  @@index([matchingStatus])
+}
+
+model PriceHistory {
+  id           String         @id @default(cuid())
+  listingId    String
+  listing      ProductListing @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  price        Decimal        @db.Decimal(12, 2)
+  availability Availability
+  recordedAt   DateTime       @default(now())
+
+  @@index([listingId])
+  @@index([recordedAt])
+  @@index([listingId, recordedAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// DATA COLLECTION
+// ─────────────────────────────────────────────────────────────────────────
+
+model DataSource {
+  id         String         @id @default(cuid())
+  name       String
+  type       DataSourceType
+  baseUrl    String?
+  adapterKey String // maps to an entry in the adapter registry, e.g. "startech", "mock-startech"
+  isActive   Boolean        @default(true)
+  lastRunAt  DateTime?
+  config     Json? // adapter-specific settings (rate limit, selectors, feed URL, etc.)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  retailers Retailer[]
+  runs      ScraperRun[]
+
+  @@index([adapterKey])
+}
+
+model ScraperRun {
+  id           String     @id @default(cuid())
+  dataSourceId String
+  dataSource   DataSource @relation(fields: [dataSourceId], references: [id], onDelete: Cascade)
+
+  status          ScraperRunStatus @default(RUNNING)
+  startedAt       DateTime         @default(now())
+  finishedAt      DateTime?
+  productsSeen    Int              @default(0)
+  productsMatched Int              @default(0)
+  errorCount      Int              @default(0)
+  errorSummary    String?          @db.Text
+
+  @@index([dataSourceId])
+  @@index([startedAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ADMIN (global-secret gated — no per-admin accounts in V1)
+// ─────────────────────────────────────────────────────────────────────────
+
+model AdminAuditLog {
+  id        String   @id @default(cuid())
+  action    String // e.g. "product.update", "listing.relink", "retailer.toggle"
+  entity    String // e.g. "Product"
+  entityId  String?
+  detail    Json?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// FUTURE-READY: USERS, WATCHLISTS, PRICE ALERTS, NOTIFICATIONS
+// (schema only — not wired to auth/UI in V1)
+// ─────────────────────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  watchlistItems WatchlistItem[]
+  priceAlerts    PriceAlert[]
+  notifications  Notification[]
+}
+
+model WatchlistItem {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@index([userId])
+}
+
+model PriceAlert {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  targetPrice Decimal   @db.Decimal(12, 2)
+  isActive    Boolean   @default(true)
+  triggeredAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  notifications Notification[]
+
+  @@index([userId])
+  @@index([productId])
+}
+
+model Notification {
+  id           String      @id @default(cuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  priceAlertId String?
+  priceAlert   PriceAlert? @relation(fields: [priceAlertId], references: [id], onDelete: SetNull)
+  message      String
+  isRead       Boolean     @default(false)
+  createdAt    DateTime    @default(now())
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// ANALYTICS (anonymous, event-based)
+// ─────────────────────────────────────────────────────────────────────────
+
+model AnalyticsEvent {
+  id         String             @id @default(cuid())
+  type       AnalyticsEventType
+  query      String? // for SEARCH events
+  productId  String?
+  categoryId String?
+  retailerId String?
+  metadata   Json?
+  createdAt  DateTime           @default(now())
+
+  @@index([type, createdAt])
+  @@index([productId])
+}
