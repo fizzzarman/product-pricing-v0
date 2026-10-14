@@ -179,3 +179,79 @@ export function extractJsonLdProducts($: cheerio.CheerioAPI, baseUrl: string): J
     };
   });
 }
+
+export interface CategoryDiscoveryConfig {
+  /** Page whose menu lists the categories. Defaults to the retailer's homepage. */
+  url?: string;
+  /** Selector for category links, e.g. "#main-nav a[href]" or 'a[href*="/category/"]'. */
+  linkSelector: string;
+  /** Regex a link's path must match (e.g. "^/categories/"). */
+  include?: string;
+  /** Regexes for paths to skip (account pages, offers, blog...). */
+  exclude?: string[];
+  /**
+   * Which links to keep, using the URL path hierarchy (/component is the
+   * parent of /component/processor):
+   *  - "leaf" (default): most specific categories only — no products are crawled twice;
+   *  - "top": top-level categories only — fewer pages, coarser categories;
+   *  - "all": everything.
+   */
+  level?: "leaf" | "top" | "all";
+}
+
+export interface DiscoveredCategory {
+  url: string;
+  name: string;
+  /** Names of the parent categories, outermost first (from the URL path hierarchy). */
+  trail: string[];
+}
+
+const GENERIC_LINK_TEXT = /^(show|view|see) all\b|^all$|^more$/i;
+
+/** Pulls category links out of a retailer's navigation menu. Pure — see CategoryDiscoveryConfig. */
+export function extractCategoryLinks(
+  $: cheerio.CheerioAPI,
+  baseUrl: string,
+  config: CategoryDiscoveryConfig
+): DiscoveredCategory[] {
+  const base = new URL(baseUrl);
+  const include = config.include ? new RegExp(config.include, "i") : null;
+  const exclude = (config.exclude ?? []).map((pattern) => new RegExp(pattern, "i"));
+
+  const byPath = new Map<string, { url: string; name: string; path: string }>();
+  $(config.linkSelector).each((_, el) => {
+    const url = absoluteUrl($(el).attr("href"), baseUrl);
+    if (!url) return;
+    const parsed = new URL(url);
+    if (parsed.hostname.replace(/^www\./, "") !== base.hostname.replace(/^www\./, "")) return;
+
+    const path = parsed.pathname.replace(/\/+$/, "") || "/";
+    if (path === "/") return;
+    if (include && !include.test(path)) return;
+    if (exclude.some((re) => re.test(path + parsed.search))) return;
+
+    const name = cleanText($(el).text()) || cleanText($(el).attr("title") ?? "");
+    const existing = byPath.get(path);
+    // Menus often repeat a category as "Show All X"; keep the most descriptive name.
+    if (existing && (!name || GENERIC_LINK_TEXT.test(name) || !GENERIC_LINK_TEXT.test(existing.name))) return;
+    if (!name) return;
+    byPath.set(path, { url: `${parsed.origin}${path}`, name, path });
+  });
+
+  const entries = [...byPath.values()];
+  const parentOf = (path: string) =>
+    entries
+      .filter((other) => other.path !== path && path.startsWith(other.path + "/"))
+      .sort((a, b) => b.path.length - a.path.length)[0];
+  const hasChildren = (path: string) => entries.some((other) => other.path.startsWith(path + "/"));
+
+  const trailOf = (path: string): string[] => {
+    const parent = parentOf(path);
+    return parent ? [...trailOf(parent.path), parent.name] : [];
+  };
+
+  const level = config.level ?? "leaf";
+  return entries
+    .filter((e) => (level === "leaf" ? !hasChildren(e.path) : level === "top" ? !parentOf(e.path) : true))
+    .map((e) => ({ url: e.url, name: e.name, trail: trailOf(e.path) }));
+}

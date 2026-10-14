@@ -1,4 +1,5 @@
 import type { RetailerProduct } from "@/types";
+import type { DiscoveredCategory } from "@/adapters/scraper/parse";
 import type { Availability } from "@/generated/prisma/client";
 
 /**
@@ -25,6 +26,9 @@ export interface RetailerAdapter {
     listingUrl: string,
     options?: { maxPages?: number; shouldContinue?: () => boolean }
   ): Promise<RetailerProduct[]>;
+
+  /** List every category on the retailer's site (from its navigation menu). Optional. */
+  discoverCategories?(): Promise<DiscoveredCategory[]>;
 
   /** Fetch full details (description, images, specs) for a single product page URL. */
   getProduct(url: string): Promise<RetailerProduct>;

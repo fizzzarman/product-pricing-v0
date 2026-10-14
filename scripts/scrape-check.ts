@@ -3,12 +3,13 @@ import { LIVE_RETAILER_PRESETS } from "../src/adapters/scraper/presets";
 
 /**
  * Dry-run a retailer preset against the live site — no database needed.
- * Fetches the first page of one category, prints what the listing selectors
- * found, then opens the first product page and prints what the detail
- * selectors / JSON-LD found. Use it to verify or fix selectors.
+ * Discovers the site's categories from its menu, fetches the first page of
+ * one category, prints what the listing selectors found, then opens the
+ * first product page and prints what the detail selectors / JSON-LD found.
+ * Use it to verify or fix selectors.
  *
- *   npm run scrape:check -- startech            # first category
- *   npm run scrape:check -- ryans 3             # 4th category in the preset
+ *   npm run scrape:check -- startech            # first discovered category
+ *   npm run scrape:check -- ryans 3             # 4th discovered category
  *   npm run scrape:check -- dazzle https://dazzle.com.bd/categories/phones
  */
 async function main() {
@@ -25,9 +26,18 @@ async function main() {
     ...preset.config,
   });
 
-  const listingUrl =
-    target && target.startsWith("http") ? target : preset.config.categoryUrls?.[Number(target ?? 0)]?.url;
-  if (!listingUrl) throw new Error("No category URL to check");
+  let listingUrl = target?.startsWith("http") ? target : undefined;
+  if (!listingUrl) {
+    const categories = await adapter.discoverCategories();
+    console.log(`Categories discovered from the site menu: ${categories.length}`);
+    for (const [i, c] of categories.slice(0, 20).entries()) {
+      console.log(`  ${i}. ${[...c.trail, c.name].join(" › ")}  ${c.url}`);
+    }
+    if (categories.length > 20) console.log(`  … and ${categories.length - 20} more`);
+    listingUrl = categories[Number(target ?? 0)]?.url;
+    if (!listingUrl) throw new Error("No categories discovered — fix categoryDiscovery.linkSelector in presets.ts");
+    console.log();
+  }
 
   console.log(`Listing: ${listingUrl}`);
   const products = await adapter.crawlListing(listingUrl, { maxPages: 1 });

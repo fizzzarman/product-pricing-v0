@@ -205,9 +205,26 @@ serverless function, since bundling a full browser isn't a good fit there.
 
 ## Live retailers (Star Tech, Ryans, Dazzle)
 
-Presets for the three live retailers live in `src/adapters/scraper/presets.ts`. Each one lists
-the retailer's **category pages** (crawled page by page via `?page=N`, so the whole catalog is
-covered, not just search hits) plus CSS selectors for product cards and product pages.
+Presets for the three live retailers live in `src/adapters/scraper/presets.ts`: CSS selectors
+for product cards and product pages, plus where to find the site's category menu.
+
+### All categories, managed from the admin
+
+Categories are not hard-coded. **Admin → Retailers → Categories → "Sync categories from site"**
+reads every category link from the retailer's navigation menu and stores the list on the
+retailer's data source. Then:
+
+- each category is auto-mapped to one of ours by keyword (`lib/retailers/categoryMapping.ts`,
+  using parent names too, so "Laptop › Asus" → Laptop). A category with no match (e.g. "UPS")
+  gets a new category of its own under **More Categories**;
+- all categories are **enabled** by default. Untick any you don't want, or pick a different
+  mapping, and press **Apply**;
+- re-syncing keeps your choices, adds new categories the retailer has added, and flags ones
+  that disappeared from the site instead of deleting them.
+
+Every enabled category is crawled page by page (`?page=N`), so the whole catalog is covered.
+Changing a category's mapping only affects products found after the change; products
+already imported keep their category (edit them under Admin → Products).
 
 Per product the scraper collects **price, availability, title, URL and image** from the
 listing grid, then opens a capped number of product pages per run
@@ -218,19 +235,22 @@ fall back to schema.org JSON-LD and OpenGraph tags when a selector misses.
 npm run scrape:check -- startech    # 1. check selectors against the live site (no DB needed)
 npm run scrape:check -- ryans
 npm run scrape:check -- dazzle
-npm run seed:live                   # 2. register the live retailers, retire mock data
-npm run sync                        # 3. first full crawl from your machine (no time limit)
+npm run seed:live                   # 2. register the live retailers + sync their categories, retire mock data
+                                    # 3. review categories in Admin → Retailers → Categories
+npm run sync                        # 4. first full crawl from your machine (no time limit)
 ```
 
-After that, the 3-hourly cron keeps prices and stock fresh. Each run has a time budget, starts
+After that, the 3-hourly cron keeps prices and stock fresh. Crawling every category of a big
+site takes far longer than one serverless run allows. Expect the cron to need many runs to cover
+a full catalog, or schedule `npm run sync` on a machine or GitHub Actions instead. Each run has a time budget, starts
 one category further along than the previous run, and spends the last quarter of its budget on
 product-page enrichment, so a large catalog is covered across several runs.
 
 **Before relying on it:**
 
 - **Selectors are unverified.** They were written from each site's known markup, but the
-  build environment could not reach the sites. Run `scrape:check` and fix any selector that
-  returns 0 products, either in `presets.ts` (then re-run `seed:live`) or directly in the
+  build environment could not reach the sites. Run `scrape:check`, which also lists the
+  categories discovered from the menu, and fix any selector that returns 0 categories or products, either in `presets.ts` (then re-run `seed:live`) or directly in the
   `DataSource.config` row.
 - **Dazzle appears to render its catalog client-side.** Search engines index its category
   pages with navigation only. If `scrape:check -- dazzle` finds 0 products, Dazzle needs its

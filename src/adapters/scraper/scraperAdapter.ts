@@ -14,6 +14,9 @@ import {
   readImageUrl,
   readableText,
   absoluteUrl,
+  extractCategoryLinks,
+  type CategoryDiscoveryConfig,
+  type DiscoveredCategory,
 } from "@/adapters/scraper/parse";
 
 const DEFAULT_USER_AGENT = "DaamKotoBot/1.0 (+https://daamkoto.example.com/about-daamkotobot)";
@@ -63,8 +66,12 @@ export interface ScraperAdapterConfig {
   /** Product-card selectors, used for both search result pages and category listing pages. */
   searchSelectors: SelectorSet;
   productSelectors?: ProductPageSelectors;
+  /** How to find every category on the site (used by Admin → Retailers → Categories → Sync categories). */
+  categoryDiscovery?: CategoryDiscoveryConfig;
   /** Query-string parameter used for listing pagination. Defaults to "page". */
   pageParam?: string;
+  /** Extra query parameters added to every category listing URL, e.g. { limit: "90" } for bigger pages. */
+  listingParams?: Record<string, string>;
   /** Substrings (case-insensitive) in availability text. Defaults to a common EN/BN set. */
   outOfStockKeywords?: string[];
   lowStockKeywords?: string[];
@@ -127,6 +134,7 @@ export class ScraperAdapter implements RetailerAdapter {
       if (page > 1 && options.shouldContinue && !options.shouldContinue()) break;
 
       const url = new URL(listingUrl);
+      for (const [name, value] of Object.entries(this.config.listingParams ?? {})) url.searchParams.set(name, value);
       if (page > 1) url.searchParams.set(pageParam, String(page));
 
       const products = this.parseListingPage(await this.fetchHtml(url.toString()));
@@ -138,6 +146,13 @@ export class ScraperAdapter implements RetailerAdapter {
     }
 
     return [...byUrl.values()];
+  }
+
+  async discoverCategories(): Promise<DiscoveredCategory[]> {
+    const discovery = this.config.categoryDiscovery;
+    if (!discovery) throw new AdapterError(this.key, "categoryDiscovery is not configured for this retailer");
+    const url = discovery.url ?? this.config.baseUrl;
+    return extractCategoryLinks(cheerio.load(await this.fetchHtml(url)), url, discovery);
   }
 
   async getProduct(url: string): Promise<RetailerProduct> {

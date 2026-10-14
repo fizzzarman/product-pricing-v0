@@ -1,9 +1,10 @@
 import "dotenv/config";
-import { PrismaClient, type Prisma } from "../src/generated/prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
+import type { Prisma } from "../src/generated/prisma/client";
+import { prisma } from "../src/lib/db/prisma";
 
 import { CATEGORY_TREE, flattenCategories } from "../src/lib/products/categoryTree";
 import { LIVE_RETAILER_PRESETS } from "../src/adapters/scraper/presets";
+import { discoverRetailerCategories } from "../src/lib/retailers/categories";
 
 /**
  * Registers the live retailers (Star Tech, Ryans, Dazzle) as PERMITTED_SCRAPE
@@ -11,18 +12,19 @@ import { LIVE_RETAILER_PRESETS } from "../src/adapters/scraper/presets";
  *
  *   npm run seed:live              # switch to live data, retire mock listings
  *   npm run seed:live -- --keep-mock   # add live sources, leave mock data alone
+ *   npm run seed:live -- --skip-categories   # don't fetch the sites' category menus now
  *
- * Re-running is safe: it re-applies the preset configs (overwriting manual
- * edits to those DataSource.config rows) and leaves scraped listings intact.
+ * It also fetches every category from each site's menu (the same as
+ * Admin → Retailers → Categories → "Sync categories").
+ *
+ * Re-running is safe: it re-applies the preset selectors but keeps the
+ * admin's curated category list, and leaves scraped listings intact.
  * After this, trigger a sync from Admin → Retailers → Sync now, or call
  * /api/cron/sync-all with the CRON_SECRET bearer token.
  */
 
-const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }),
-});
-
 const keepMock = process.argv.includes("--keep-mock");
+const skipCategories = process.argv.includes("--skip-categories");
 
 async function ensureCategories() {
   const flat = flattenCategories(CATEGORY_TREE);
@@ -46,9 +48,18 @@ async function main() {
 
   for (const preset of LIVE_RETAILER_PRESETS) {
     const dataSourceId = `live-${preset.key}`;
+    // Keep the admin's curated category list (and any other runtime state) when re-applying the preset.
+    const current = await prisma.dataSource.findUnique({ where: { id: dataSourceId }, select: { config: true } });
+    const currentConfig = (current?.config as Record<string, unknown> | null) ?? {};
+    const config = {
+      ...preset.config,
+      ...(currentConfig.categoryUrls ? { categoryUrls: currentConfig.categoryUrls } : {}),
+      ...(currentConfig.categoriesSyncedAt ? { categoriesSyncedAt: currentConfig.categoriesSyncedAt } : {}),
+    } as unknown as Prisma.InputJsonValue;
+
     const dataSource = await prisma.dataSource.upsert({
       where: { id: dataSourceId },
-      update: { config: preset.config as unknown as Prisma.InputJsonValue, baseUrl: preset.websiteUrl, isActive: true },
+      update: { config, baseUrl: preset.websiteUrl, isActive: true },
       create: {
         id: dataSourceId,
         name: `${preset.name} (live scrape)`,
@@ -56,7 +67,7 @@ async function main() {
         baseUrl: preset.websiteUrl,
         adapterKey: preset.key,
         isActive: true,
-        config: preset.config as unknown as Prisma.InputJsonValue,
+        config,
       },
     });
 
@@ -70,12 +81,21 @@ async function main() {
       console.log(`  ${preset.name}: removed ${count} mock listings`);
     }
 
-    await prisma.retailer.upsert({
+    const retailer = await prisma.retailer.upsert({
       where: { slug: preset.slug },
       update: { name: preset.name, websiteUrl: preset.websiteUrl, dataSourceId: dataSource.id, isActive: true },
       create: { name: preset.name, slug: preset.slug, websiteUrl: preset.websiteUrl, dataSourceId: dataSource.id, isActive: true },
     });
     console.log(`  ${preset.name}: live data source ready`);
+
+    if (!skipCategories) {
+      try {
+        const result = await discoverRetailerCategories(retailer.id);
+        console.log(`  ${preset.name}: ${result.found} categories found on the site (${result.added} new)`);
+      } catch (err) {
+        console.warn(`  ${preset.name}: category sync failed — retry from Admin → Retailers → Categories. ${(err as Error).message}`);
+      }
+    }
   }
 
   if (!keepMock) {

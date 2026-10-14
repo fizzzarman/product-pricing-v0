@@ -6,6 +6,11 @@ import type { CategoryCrawl, SeedQuery } from "@/lib/retailers/sync";
  * writes these into the database; after that the DB row is the source of
  * truth and can be tuned from Prisma Studio without a deploy.
  *
+ * Categories aren't listed here: every category on each site is discovered
+ * from its navigation menu (`categoryDiscovery`) by Admin → Retailers →
+ * Categories → "Sync categories", where the admin can also switch
+ * categories off or remap them. The result is stored in config.categoryUrls.
+ *
  * ⚠️ The CSS selectors below are written from each site's known markup but
  * could not be verified against the live sites from the build environment.
  * Before relying on them, run `npm run scrape:check -- <retailer>` (see
@@ -61,27 +66,14 @@ export const LIVE_RETAILER_PRESETS: LiveRetailerPreset[] = [
       },
       minRequestIntervalMs: 2000,
       maxDetailPagesPerRun: 40,
-      categoryUrls: [
-        { url: `${STARTECH}/laptop-notebook?limit=90`, categorySlug: "laptop" },
-        { url: `${STARTECH}/desktops?limit=90`, categorySlug: "desktop" },
-        { url: `${STARTECH}/component/processor?limit=90`, categorySlug: "cpu" },
-        { url: `${STARTECH}/component/graphics-card?limit=90`, categorySlug: "gpu" },
-        { url: `${STARTECH}/component/motherboard?limit=90`, categorySlug: "motherboard" },
-        { url: `${STARTECH}/component/ram?limit=90`, categorySlug: "ram" },
-        { url: `${STARTECH}/component/SSD-Hard-Disk?limit=90`, categorySlug: "ssd" },
-        { url: `${STARTECH}/component/hdd-hard-disk?limit=90`, categorySlug: "hdd" },
-        { url: `${STARTECH}/component/power-supply?limit=90`, categorySlug: "power-supply" },
-        { url: `${STARTECH}/component/casing?limit=90`, categorySlug: "pc-case" },
-        { url: `${STARTECH}/component/CPU-Cooler?limit=90`, categorySlug: "cpu-cooler" },
-        { url: `${STARTECH}/monitor?limit=90`, categorySlug: "monitor" },
-        { url: `${STARTECH}/accessories/keyboards?limit=90`, categorySlug: "keyboard" },
-        { url: `${STARTECH}/accessories/mouse?limit=90`, categorySlug: "mouse" },
-        { url: `${STARTECH}/accessories/headphone?limit=90`, categorySlug: "headphone" },
-        { url: `${STARTECH}/accessories/webcam?limit=90`, categorySlug: "webcam" },
-        { url: `${STARTECH}/networking/router?limit=90`, categorySlug: "router" },
-        { url: `${STARTECH}/mobile-phone?limit=90`, categorySlug: "smartphone" },
-        { url: `${STARTECH}/tablet-pc?limit=90`, categorySlug: "tablet" },
-      ],
+      listingParams: { limit: "90" },
+      categoryDiscovery: {
+        // Star Tech's mega-menu. Leaf entries are the most specific pages (e.g. /component/processor),
+        // so nothing is crawled twice.
+        linkSelector: "#main-nav a[href]",
+        exclude: ["^/(information|account|tool|compare|offers?|blog|contact|checkout|cart|pc-builder|brands?)\\b", "route="],
+        level: "leaf",
+      },
     },
   },
   {
@@ -111,16 +103,12 @@ export const LIVE_RETAILER_PRESETS: LiveRetailerPreset[] = [
       },
       minRequestIntervalMs: 2000,
       maxDetailPagesPerRun: 40,
-      categoryUrls: [
-        { url: `${RYANS}/category/laptop-all-laptop?limit=100`, categorySlug: "laptop" },
-        { url: `${RYANS}/category/desktop-pc-all-desktop-pc?limit=100`, categorySlug: "desktop" },
-        { url: `${RYANS}/category/desktop-component-processor?limit=100`, categorySlug: "cpu" },
-        { url: `${RYANS}/category/desktop-component-graphics-card?limit=100`, categorySlug: "gpu" },
-        { url: `${RYANS}/category/desktop-component-motherboard?limit=100`, categorySlug: "motherboard" },
-        { url: `${RYANS}/category/desktop-component-desktop-ram?limit=100`, categorySlug: "ram" },
-        { url: `${RYANS}/category/desktop-component-ssd?limit=100`, categorySlug: "ssd" },
-        { url: `${RYANS}/category/monitor-all-monitor?limit=100`, categorySlug: "monitor" },
-      ],
+      listingParams: { limit: "100" },
+      categoryDiscovery: {
+        linkSelector: 'a[href*="/category/"]',
+        include: "^/category/.+",
+        level: "leaf",
+      },
     },
   },
   {
@@ -149,15 +137,12 @@ export const LIVE_RETAILER_PRESETS: LiveRetailerPreset[] = [
       },
       minRequestIntervalMs: 2000,
       maxDetailPagesPerRun: 40,
-      categoryUrls: [
-        { url: `${DAZZLE}/categories/phones`, categorySlug: "smartphone" },
-        { url: `${DAZZLE}/categories/laptop`, categorySlug: "laptop" },
-        { url: `${DAZZLE}/categories/tablet`, categorySlug: "tablet" },
-        { url: `${DAZZLE}/categories/smart-watch`, categorySlug: "smartwatch" },
-        { url: `${DAZZLE}/categories/sounds`, categorySlug: "speakers" },
-        { url: `${DAZZLE}/categories/gadget`, categorySlug: "gadgets" },
-        { url: `${DAZZLE}/categories/accessories`, categorySlug: "gadgets" },
-      ],
+      categoryDiscovery: {
+        // Top-level only: Dazzle's sub-levels are brands (/categories/phones/xiaomi), already covered by the parent page.
+        linkSelector: 'a[href*="/categories/"]',
+        include: "^/categories/.+",
+        level: "top",
+      },
     },
   },
 ];

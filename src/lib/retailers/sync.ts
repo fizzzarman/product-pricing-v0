@@ -5,6 +5,7 @@ import { slugify } from "@/lib/products/slugify";
 import { computePriceSummary } from "@/lib/pricing/summary";
 import type { RetailerProduct } from "@/types";
 import type { RetailerAdapter } from "@/adapters/base/types";
+import { ensureCategory } from "@/lib/retailers/categories";
 import type { Availability } from "@/generated/prisma/client";
 
 export interface SeedQuery {
@@ -12,15 +13,26 @@ export interface SeedQuery {
   categorySlug: string;
 }
 
-/** A category/listing page to walk page-by-page; every product on it lands in `categorySlug`. */
+/**
+ * A category/listing page to walk page-by-page; every product on it lands in
+ * `categorySlug`. Normally filled in by Admin → Retailers → Categories →
+ * "Sync categories" (see lib/retailers/categories.ts), then curated there.
+ */
 export interface CategoryCrawl {
   url: string;
   categorySlug: string;
+  /** The retailer's own name for the category, and its parents' names. */
+  name?: string;
+  trail?: string[];
+  /** Admin can switch individual categories off. Defaults to true. */
+  enabled?: boolean;
+  /** Set when the last category sync no longer found this link on the site. */
+  notFoundOnSite?: boolean;
   /** Defaults to 20 pages. */
   maxPages?: number;
 }
 
-interface SyncConfig {
+export interface SyncConfig {
   seedQueries?: SeedQuery[];
   categoryUrls?: CategoryCrawl[];
   /** Product pages opened per run to backfill description/images/specs. Defaults to 0 (off). */
@@ -85,7 +97,7 @@ export async function syncRetailer(retailerId: string, options: SyncOptions = {}
   const dataSource = retailer.dataSource;
   const config = (dataSource.config as SyncConfig | null) ?? {};
   const seedQueries = config.seedQueries ?? [];
-  const categoryUrls = config.categoryUrls ?? [];
+  const categoryUrls = (config.categoryUrls ?? []).filter((c) => c.enabled !== false);
 
   const run = await prisma.scraperRun.create({
     data: { dataSourceId: dataSource.id, status: "RUNNING" },
@@ -110,7 +122,7 @@ export async function syncRetailer(retailerId: string, options: SyncOptions = {}
 
   const deferred: string[] = [];
 
-  const ingest = async (results: RetailerProduct[], categorySlug: string) => {
+  const ingest = async (results: RetailerProduct[], categorySlug: string, categoryName: string) => {
     for (const [index, item] of results.entries()) {
       // DB writes for a big category can outlast the budget too; leave the rest for the next run.
       if (!hasTime()) {
@@ -122,7 +134,7 @@ export async function syncRetailer(retailerId: string, options: SyncOptions = {}
       productsSeen++;
 
       try {
-        const productId = await upsertListing(retailerId, item, categorySlug);
+        const productId = await upsertListing(retailerId, item, categorySlug, categoryName);
         touchedProductIds.add(productId);
         productsMatched++;
       } catch (err) {
@@ -149,7 +161,7 @@ export async function syncRetailer(retailerId: string, options: SyncOptions = {}
     }
     try {
       const results = await adapter.crawlListing(category.url, { maxPages: category.maxPages, shouldContinue: hasCrawlTime });
-      await ingest(results, category.categorySlug);
+      await ingest(results, category.categorySlug, category.name ?? category.categorySlug);
     } catch (err) {
       errors.push(`[${category.url}] crawl failed: ${(err as Error).message}`);
     }
@@ -161,7 +173,7 @@ export async function syncRetailer(retailerId: string, options: SyncOptions = {}
       continue;
     }
     try {
-      await ingest(await adapter.searchProducts(seed.query), seed.categorySlug);
+      await ingest(await adapter.searchProducts(seed.query), seed.categorySlug, seed.categorySlug);
     } catch (err) {
       errors.push(`[${seed.query}] search failed: ${(err as Error).message}`);
     }
@@ -189,7 +201,12 @@ export async function syncRetailer(retailerId: string, options: SyncOptions = {}
  * is linked to: re-matching on every run would let a low-confidence title
  * spawn a fresh duplicate product each sync, and would undo admin relinks.
  */
-async function upsertListing(retailerId: string, item: RetailerProduct, categorySlug: string): Promise<string> {
+async function upsertListing(
+  retailerId: string,
+  item: RetailerProduct,
+  categorySlug: string,
+  categoryName: string
+): Promise<string> {
   const existing = await prisma.productListing.findUnique({
     where: { retailerId_externalUrl: { retailerId, externalUrl: item.url } },
     select: { id: true, productId: true, price: true },
@@ -216,7 +233,7 @@ async function upsertListing(retailerId: string, item: RetailerProduct, category
     listingId = existing.id;
     productId = existing.productId;
   } else {
-    const resolved = await resolveProductId(item, categorySlug);
+    const resolved = await resolveProductId(item, categorySlug, categoryName);
     productId = resolved.productId;
     const listing = await prisma.productListing.create({
       data: {
@@ -315,7 +332,8 @@ async function enrichListingDetails(
  */
 async function resolveProductId(
   item: RetailerProduct,
-  categorySlug: string
+  categorySlug: string,
+  categoryName: string
 ): Promise<{ productId: string; confidence: number }> {
   const candidates = await findCandidateProducts(item.title, 5);
   const match = matchTitleToCandidates(item.title, candidates);
@@ -324,8 +342,7 @@ async function resolveProductId(
     return { productId: match.productId, confidence: match.confidence };
   }
 
-  const category = await prisma.category.findUnique({ where: { slug: categorySlug } });
-  if (!category) throw new Error(`Unknown categorySlug "${categorySlug}" in seedQueries config`);
+  const categoryId = await ensureCategory(categorySlug, categoryName);
 
   let brandId: string | undefined;
   if (match.extractedBrand) {
@@ -345,7 +362,7 @@ async function resolveProductId(
       name: match.normalizedTitle || item.title,
       slug,
       brandId,
-      categoryId: category.id,
+      categoryId,
       description: item.description,
       specifications: { ...match.extractedSpecs, ...(item.specifications ?? {}) },
       imageUrl: item.imageUrl,
