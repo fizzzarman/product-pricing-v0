@@ -1,10 +1,7 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies
 /node_modules
-=======
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-
 /.pnp
 .pnp.*
 .yarn/*
@@ -20,25 +17,11 @@
 /.next/
 /out/
 
+# production
 /build
-next-env.d.ts
 
 # prisma client is generated on `npm install` (postinstall)
 /src/generated/
-
-# env files
-.env
-.env*.local
-
-# misc
-.DS_Store
-*.tsbuildinfo
-.vercel
-coverage
-=======
-
-# production
-/build
 
 # misc
 .DS_Store
@@ -52,6 +35,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
