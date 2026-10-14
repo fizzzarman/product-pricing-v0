@@ -219,8 +219,10 @@ retailer's data source. Then:
   gets a new category of its own under **More Categories**;
 - all categories are **enabled** by default. Untick any you don't want, or pick a different
   mapping, and press **Apply**;
-- re-syncing keeps your choices, adds new categories the retailer has added, and flags ones
-  that disappeared from the site (switching them off) instead of deleting them.
+- re-syncing keeps your choices, re-maps categories you haven't changed by hand, adds new
+  categories the retailer has added, and flags ones that disappeared from the site (switching
+  them off) instead of deleting them. **Remove N no longer on the site** clears those, along
+  with any empty auto-created categories.
 
 Every enabled category is crawled page by page (`?page=N`), so the whole catalog is covered.
 Changing a category's mapping only affects products found after the change; products

@@ -6,13 +6,21 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { prisma } from "@/lib/db/prisma";
 import type { SyncConfig } from "@/lib/retailers/sync";
-import { applyCategories, syncCategories } from "./actions";
+import { applyCategories, pruneCategories, syncCategories } from "./actions";
 
 export const dynamic = "force-dynamic";
 // Category discovery fetches robots.txt + the retailer's homepage.
 export const maxDuration = 60;
 
-type SearchParams = { found?: string; added?: string; missing?: string; error?: string; applied?: string };
+type SearchParams = {
+  found?: string;
+  added?: string;
+  missing?: string;
+  error?: string;
+  applied?: string;
+  pruned?: string;
+  prunedCategories?: string;
+};
 
 export default async function RetailerCategoriesPage({
   params,
@@ -32,6 +40,7 @@ export default async function RetailerCategoriesPage({
     [...(a.trail ?? []), a.name ?? a.url].join(" › ").localeCompare([...(b.trail ?? []), b.name ?? b.url].join(" › "))
   );
   const enabledCount = entries.filter((e) => e.enabled !== false).length;
+  const missingCount = entries.filter((e) => e.notFoundOnSite).length;
 
   // Only leaf categories hold products, so those are the mapping targets.
   const categories = await prisma.category.findMany({
@@ -47,6 +56,7 @@ export default async function RetailerCategoriesPage({
 
   const sync = syncCategories.bind(null, retailer.id, retailer.slug);
   const apply = applyCategories.bind(null, retailer.id, retailer.slug);
+  const prune = pruneCategories.bind(null, retailer.id, retailer.slug);
 
   return (
     <div>
@@ -64,11 +74,20 @@ export default async function RetailerCategoriesPage({
             {config.categoriesSyncedAt && ` Last synced ${new Date(config.categoriesSyncedAt).toLocaleString()}.`}
           </p>
         </div>
-        <form action={sync}>
-          <Button type="submit" size="sm">
-            <RefreshCw className="size-3.5" /> Sync categories from site
-          </Button>
-        </form>
+        <div className="flex flex-wrap gap-2">
+          {missingCount > 0 && (
+            <form action={prune}>
+              <Button type="submit" size="sm" variant="outline">
+                Remove {missingCount} no longer on the site
+              </Button>
+            </form>
+          )}
+          <form action={sync}>
+            <Button type="submit" size="sm">
+              <RefreshCw className="size-3.5" /> Sync categories from site
+            </Button>
+          </form>
+        </div>
       </div>
 
       {notice.error && (
@@ -82,6 +101,12 @@ export default async function RetailerCategoriesPage({
         </Card>
       )}
       {notice.applied && <Card className="mb-4 p-3 text-sm">Saved {notice.applied} change(s).</Card>}
+      {notice.pruned && (
+        <Card className="mb-4 p-3 text-sm">
+          Removed {notice.pruned} categories no longer on the site and {notice.prunedCategories} empty auto-created
+          categories.
+        </Card>
+      )}
 
       {entries.length > 0 && (
         <form action={apply}>

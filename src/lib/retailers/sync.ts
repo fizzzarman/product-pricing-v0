@@ -27,6 +27,8 @@ export interface CategoryCrawl {
   trail?: string[];
   /** Admin can switch individual categories off. Defaults to true. */
   enabled?: boolean;
+  /** "admin" once someone picks the category by hand; auto mappings are refreshed on each category sync. */
+  mappedBy?: "auto" | "admin";
   /** Set when the last category sync no longer found this link on the site. */
   notFoundOnSite?: boolean;
   /** Defaults to 20 pages. */

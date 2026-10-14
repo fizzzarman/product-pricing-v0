@@ -3,7 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { applyRetailerCategoryUpdates, discoverRetailerCategories, type CategoryUpdate } from "@/lib/retailers/categories";
+import {
+  applyRetailerCategoryUpdates,
+  discoverRetailerCategories,
+  pruneMissingCategories,
+  type CategoryUpdate,
+} from "@/lib/retailers/categories";
 
 const slugSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
 
@@ -41,4 +46,11 @@ export async function applyCategories(retailerId: string, retailerSlug: string, 
   const changed = await applyRetailerCategoryUpdates(retailerId, updates);
   revalidatePath(pagePath(retailerSlug));
   redirect(`${pagePath(retailerSlug)}?applied=${changed}`);
+}
+
+/** "Remove N no longer on the site": drop flagged entries and empty auto-created categories. */
+export async function pruneCategories(retailerId: string, retailerSlug: string) {
+  const result = await pruneMissingCategories(retailerId);
+  revalidatePath(pagePath(retailerSlug));
+  redirect(`${pagePath(retailerSlug)}?pruned=${result.removedEntries}&prunedCategories=${result.removedCategories}`);
 }

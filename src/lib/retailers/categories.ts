@@ -16,21 +16,22 @@ export async function ensureCategory(slug: string, name: string): Promise<string
   const existing = await prisma.category.findUnique({ where: { slug }, select: { id: true } });
   if (existing) return existing.id;
 
+  // Upserts on the unique slug run as INSERT ... ON CONFLICT, so a category created
+  // in the meantime (another sync, a stale read through the connection pooler) is
+  // simply reused instead of failing with a unique-constraint error.
   const parent = await prisma.category.upsert({
     where: { slug: MORE_CATEGORIES.slug },
     update: {},
     create: { ...MORE_CATEGORIES, iconName: "Package", sortOrder: 100 },
+    select: { id: true },
   });
-
-  try {
-    const created = await prisma.category.create({ data: { name, slug, parentId: parent.id, iconName: "Package" } });
-    return created.id;
-  } catch (err) {
-    // Another sync created it concurrently.
-    const raced = await prisma.category.findUnique({ where: { slug }, select: { id: true } });
-    if (raced) return raced.id;
-    throw err;
-  }
+  const category = await prisma.category.upsert({
+    where: { slug },
+    update: {},
+    create: { name, slug, parentId: parent.id, iconName: "Package" },
+    select: { id: true },
+  });
+  return category.id;
 }
 
 /** Slug for a retailer category: one of ours if the keyword rules match, else one derived from its name. */
@@ -86,7 +87,9 @@ export async function discoverRetailerCategories(retailerId: string): Promise<Ca
     const previous = existing.get(d.url);
     if (previous) {
       const { notFoundOnSite: _dropped, ...rest } = previous; // eslint-disable-line @typescript-eslint/no-unused-vars
-      return { ...rest, name: d.name, trail: d.trail };
+      // Re-map with the latest name/parents unless an admin picked the category by hand.
+      const categorySlug = previous.mappedBy === "admin" ? previous.categorySlug : suggestCategorySlug(d.name, d.trail);
+      return { ...rest, name: d.name, trail: d.trail, categorySlug };
     }
     added++;
     return { url: d.url, name: d.name, trail: d.trail, categorySlug: suggestCategorySlug(d.name, d.trail), enabled: true };
@@ -135,7 +138,13 @@ export async function applyRetailerCategoryUpdates(retailerId: string, updates: 
     }
     changed++;
     if (update.enabled) await ensureCategory(update.categorySlug, category.name ?? update.categorySlug);
-    next.push({ ...category, enabled: update.enabled, categorySlug: update.categorySlug });
+    const remapped = update.categorySlug !== category.categorySlug;
+    next.push({
+      ...category,
+      enabled: update.enabled,
+      categorySlug: update.categorySlug,
+      ...(remapped ? { mappedBy: "admin" as const } : {}),
+    });
   }
 
   if (changed > 0) {
@@ -145,4 +154,42 @@ export async function applyRetailerCategoryUpdates(retailerId: string, updates: 
     });
   }
   return changed;
+}
+
+export interface CategoryPruneResult {
+  removedEntries: number;
+  removedCategories: number;
+}
+
+/**
+ * Drops the entries a category sync flagged as no longer on the site, then
+ * deletes auto-created categories (under "More Categories") that hold no
+ * products and that no retailer's crawl list points at any more.
+ */
+export async function pruneMissingCategories(retailerId: string): Promise<CategoryPruneResult> {
+  const { retailer, dataSource } = await loadRetailer(retailerId);
+  const config = (dataSource.config as SyncConfig | null) ?? {};
+  const current = config.categoryUrls ?? [];
+  const kept = current.filter((c) => !c.notFoundOnSite);
+  if (kept.length !== current.length) await saveCategoryUrls(dataSource.id, config, kept);
+
+  const referenced = new Set<string>();
+  for (const source of await prisma.dataSource.findMany({ select: { config: true } })) {
+    for (const entry of (source.config as SyncConfig | null)?.categoryUrls ?? []) referenced.add(entry.categorySlug);
+  }
+
+  const { count: removedCategories } = await prisma.category.deleteMany({
+    where: {
+      parent: { slug: MORE_CATEGORIES.slug },
+      slug: { notIn: [...referenced] },
+      products: { none: {} },
+      children: { none: {} },
+    },
+  });
+
+  const result = { removedEntries: current.length - kept.length, removedCategories };
+  await prisma.adminAuditLog.create({
+    data: { action: "retailer.categories.prune", entity: "Retailer", entityId: retailer.id, detail: { ...result } },
+  });
+  return result;
 }
