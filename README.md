@@ -73,8 +73,8 @@ required — see `adapters/base/types.ts` for the contract every adapter impleme
 2. Wait for provisioning, then open **Project Settings → Database → Connection string**.
 3. Copy the **pooled** connection string (port `6543`, "Transaction" mode) into
    `DATABASE_URL`, and the **direct** connection string (port `5432`) into `DIRECT_URL`.
-4. Nothing extra needs to be run manually in the SQL editor — `prisma migrate dev` enables
-   the `pg_trgm`/`unaccent` extensions declared in `schema.prisma` automatically.
+4. Nothing extra needs to be run manually in the SQL editor — the migrations enable the
+   `pg_trgm` extension that search and product matching rely on.
 
 ### 2. Configure environment variables
 
