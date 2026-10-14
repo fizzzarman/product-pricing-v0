@@ -1,4 +1,4 @@
-import type { Availability } from "@prisma/client";
+import type { Availability } from "@/generated/prisma/client";
 import type { PriceSummary, FreshnessLevel } from "@/types";
 
 export interface ListingForSummary {

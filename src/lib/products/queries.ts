@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db/prisma";
 import type { ProductCardData } from "@/types";
-import type { Prisma } from "@prisma/client";
+import type { Prisma } from "@/generated/prisma/client";
 
 type ProductWithRelations = Prisma.ProductGetPayload<{
   include: { brand: true; category: true };

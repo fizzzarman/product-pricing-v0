@@ -20,6 +20,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ error: "Retailer not found" }, { status: 404 });
   }
 
-  const result = await syncRetailer(retailer.id);
+  // Leave headroom under maxDuration for the final DB writes.
+  const result = await syncRetailer(retailer.id, { timeBudgetMs: 45_000 });
   return NextResponse.json(result);
 }

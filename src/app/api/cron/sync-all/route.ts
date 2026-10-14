@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
 
   // Promise.allSettled, not Promise.all: one retailer's scraper throwing must
   // never take down the sync for the other 14 (spec §35 error isolation).
-  const settled = await Promise.allSettled(retailers.map((r) => syncRetailer(r.id)));
+  const settled = await Promise.allSettled(retailers.map((r) => syncRetailer(r.id, { timeBudgetMs: 240_000 })));
 
   const results = settled.map((result, i) => ({
     retailer: retailers[i].name,

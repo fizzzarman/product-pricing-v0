@@ -13,6 +13,9 @@
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "seed": "tsx prisma/seed.ts",
+    "seed:live": "tsx prisma/seed-live.ts",
+    "scrape:check": "tsx scripts/scrape-check.ts",
+    "sync": "tsx scripts/sync.ts",
     "test": "vitest run"
   },
   "prisma": {

@@ -1,4 +1,4 @@
-import type { Availability, MatchingStatus } from "@prisma/client";
+import type { Availability, MatchingStatus } from "@/generated/prisma/client";
 
 export type { Availability, MatchingStatus };
 
@@ -50,6 +50,10 @@ export interface RetailerProduct {
   stockQuantity: number | null;
   imageUrl: string | null;
   description: string | null;
+  /** All gallery images found on the product page, first one being the primary image. */
+  images?: string[];
+  /** Key/value spec sheet scraped from the product page. */
+  specifications?: Record<string, string>;
   raw?: Record<string, unknown>;
 }
 

@@ -1,4 +1,4 @@
-import type { DataSource } from "@prisma/client";
+import type { DataSource } from "@/generated/prisma/client";
 import type { RetailerAdapter } from "@/adapters/base/types";
 import { getAdapter } from "@/adapters/registry";
 import { ScraperAdapter, type ScraperAdapterConfig } from "@/adapters/scraper/scraperAdapter";
@@ -16,10 +16,8 @@ export function resolveAdapterForDataSource(dataSource: DataSource, retailerName
   }
 
   const config = dataSource.config as Partial<ScraperAdapterConfig> | null;
-  if (!config?.searchUrlTemplate || !config.searchSelectors) {
-    throw new Error(
-      `DataSource "${dataSource.name}" is type PERMITTED_SCRAPE but is missing searchUrlTemplate/searchSelectors in config`
-    );
+  if (!config?.searchSelectors) {
+    throw new Error(`DataSource "${dataSource.name}" is type PERMITTED_SCRAPE but is missing searchSelectors in config`);
   }
 
   return new ScraperAdapter({

@@ -54,6 +54,17 @@ export const CATEGORY_TREE: CategoryNode[] = [
       { name: "Other Hardware", nameBn: "অন্যান্য হার্ডওয়্যার", slug: "other-hardware", iconName: "Package" },
     ],
   },
+  {
+    name: "Mobile & Gadgets",
+    nameBn: "মোবাইল ও গ্যাজেট",
+    slug: "mobile-gadgets",
+    children: [
+      { name: "Smartphone", nameBn: "স্মার্টফোন", slug: "smartphone", iconName: "Smartphone" },
+      { name: "Tablet", nameBn: "ট্যাবলেট", slug: "tablet", iconName: "Tablet" },
+      { name: "Smartwatch", nameBn: "স্মার্টওয়াচ", slug: "smartwatch", iconName: "Watch" },
+      { name: "Gadgets", nameBn: "গ্যাজেট", slug: "gadgets", iconName: "Package" },
+    ],
+  },
 ];
 
 export function flattenCategories(
