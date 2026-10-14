@@ -77,7 +77,7 @@ export default async function RetailerCategoriesPage({
       {notice.found && (
         <Card className="mb-4 p-3 text-sm">
           Found {notice.found} categories on the site — {notice.added} new
-          {Number(notice.missing) > 0 && `, ${notice.missing} no longer on the site (kept, flagged below)`}. New categories
+          {Number(notice.missing) > 0 && `, ${notice.missing} no longer found (switched off and flagged below)`}. New categories
           are enabled; review the mapping below and press Apply if you change anything.
         </Card>
       )}

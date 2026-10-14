@@ -43,3 +43,37 @@ describe("extractCategoryLinks", () => {
     expect(links.map((l) => l.name)).toEqual(["Component", "Laptop", "UPS"]);
   });
 });
+
+// Star Tech's real shape: flat URLs, hierarchy only in the nested menu lists.
+const FLAT_MENU = `
+<nav id="main-nav"><ul>
+  <li><a href="/appliance">Appliance</a>
+    <ul>
+      <li><a href="/television-startech">TV</a>
+        <ul>
+          <li><a href="/haier-television">Haier</a></li>
+          <li><a href="/4k-tv">4K TV</a></li>
+        </ul>
+      </li>
+      <li><a href="/air-fryer">Air Fryer</a></li>
+    </ul>
+  </li>
+  <li><a href="/ups">UPS</a></li>
+</ul></nav>`;
+
+describe("extractCategoryLinks with flat URLs", () => {
+  it("takes the hierarchy from the nested menu", () => {
+    const links = extractCategoryLinks(cheerio.load(FLAT_MENU), base, { linkSelector: "#main-nav a[href]" });
+    expect(links).toEqual([
+      { url: `${base}/haier-television`, name: "Haier", trail: ["Appliance", "TV"] },
+      { url: `${base}/4k-tv`, name: "4K TV", trail: ["Appliance", "TV"] },
+      { url: `${base}/air-fryer`, name: "Air Fryer", trail: ["Appliance"] },
+      { url: `${base}/ups`, name: "UPS", trail: [] },
+    ]);
+  });
+
+  it("maxDepth stops at the second level instead of brand pages", () => {
+    const links = extractCategoryLinks(cheerio.load(FLAT_MENU), base, { linkSelector: "#main-nav a[href]", maxDepth: 2 });
+    expect(links.map((l) => l.name)).toEqual(["TV", "Air Fryer", "UPS"]);
+  });
+});

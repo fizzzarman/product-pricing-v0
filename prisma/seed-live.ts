@@ -90,6 +90,7 @@ async function main() {
 
     if (!skipCategories) {
       try {
+        console.log(`  ${preset.name}: reading the site's category menu...`);
         const result = await discoverRetailerCategories(retailer.id);
         console.log(`  ${preset.name}: ${result.found} categories found on the site (${result.added} new)`);
       } catch (err) {

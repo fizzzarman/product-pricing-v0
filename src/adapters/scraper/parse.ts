@@ -190,13 +190,21 @@ export interface CategoryDiscoveryConfig {
   /** Regexes for paths to skip (account pages, offers, blog...). */
   exclude?: string[];
   /**
-   * Which links to keep, using the URL path hierarchy (/component is the
-   * parent of /component/processor):
+   * Which links to keep. The hierarchy comes from the menu's nested <li>
+   * lists (Star Tech: Appliance › TV › Haier), falling back to the URL path
+   * (/categories/phones › /categories/phones/xiaomi) for flat link lists:
    *  - "leaf" (default): most specific categories only — no products are crawled twice;
    *  - "top": top-level categories only — fewer pages, coarser categories;
    *  - "all": everything.
    */
   level?: "leaf" | "top" | "all";
+  /**
+   * Ignore menu entries deeper than this before picking leaves. Star Tech's
+   * third level is brand/filter pages (TV › Haier, TV › 4K TV) whose products
+   * are all on the second-level page, so maxDepth 2 crawls "TV" once instead
+   * of a page per brand.
+   */
+  maxDepth?: number;
 }
 
 export interface DiscoveredCategory {
@@ -218,40 +226,68 @@ export function extractCategoryLinks(
   const include = config.include ? new RegExp(config.include, "i") : null;
   const exclude = (config.exclude ?? []).map((pattern) => new RegExp(pattern, "i"));
 
-  const byPath = new Map<string, { url: string; name: string; path: string }>();
+  const pathOf = (href: string | undefined): string | null => {
+    const url = absoluteUrl(href, baseUrl);
+    if (!url) return null;
+    const parsed = new URL(url);
+    if (parsed.hostname.replace(/^www\./, "") !== base.hostname.replace(/^www\./, "")) return null;
+    return parsed.pathname.replace(/\/+$/, "") || "/";
+  };
+
+  type Entry = { url: string; name: string; path: string; menuParentPath: string | null };
+  const byPath = new Map<string, Entry>();
   $(config.linkSelector).each((_, el) => {
     const url = absoluteUrl($(el).attr("href"), baseUrl);
     if (!url) return;
     const parsed = new URL(url);
-    if (parsed.hostname.replace(/^www\./, "") !== base.hostname.replace(/^www\./, "")) return;
-
-    const path = parsed.pathname.replace(/\/+$/, "") || "/";
-    if (path === "/") return;
+    const path = pathOf(url);
+    if (!path || path === "/") return;
     if (include && !include.test(path)) return;
     if (exclude.some((re) => re.test(path + parsed.search))) return;
 
+    // Menu parent: the first link of the nearest enclosing <li> other than this link's own.
+    const $parentItem = $(el).parents("li").eq(1);
+    const menuParentPath = $parentItem.length ? pathOf($parentItem.find("a[href]").first().attr("href")) : null;
+
     const name = cleanText($(el).text()) || cleanText($(el).attr("title") ?? "");
     const existing = byPath.get(path);
-    // Menus often repeat a category as "Show All X"; keep the most descriptive name.
-    if (existing && (!name || GENERIC_LINK_TEXT.test(name) || !GENERIC_LINK_TEXT.test(existing.name))) return;
+    // Menus often repeat a category as "Show All X"; keep the most descriptive name and first position.
+    if (existing) {
+      if (name && !GENERIC_LINK_TEXT.test(name) && GENERIC_LINK_TEXT.test(existing.name)) existing.name = name;
+      return;
+    }
     if (!name) return;
-    byPath.set(path, { url: `${parsed.origin}${path}`, name, path });
+    byPath.set(path, { url: `${parsed.origin}${path}`, name, path, menuParentPath: menuParentPath !== path ? menuParentPath : null });
   });
 
   const entries = [...byPath.values()];
-  const parentOf = (path: string) =>
-    entries
-      .filter((other) => other.path !== path && path.startsWith(other.path + "/"))
+  const parentOf = (entry: Entry): Entry | undefined => {
+    if (entry.menuParentPath) {
+      const menuParent = byPath.get(entry.menuParentPath);
+      if (menuParent) return menuParent;
+    }
+    return entries
+      .filter((other) => other.path !== entry.path && entry.path.startsWith(other.path + "/"))
       .sort((a, b) => b.path.length - a.path.length)[0];
-  const hasChildren = (path: string) => entries.some((other) => other.path.startsWith(path + "/"));
-
-  const trailOf = (path: string): string[] => {
-    const parent = parentOf(path);
-    return parent ? [...trailOf(parent.path), parent.name] : [];
   };
 
+  const trailOf = (entry: Entry): string[] => {
+    const trail: string[] = [];
+    const seen = new Set([entry.path]);
+    for (let parent = parentOf(entry); parent && !seen.has(parent.path); parent = parentOf(parent)) {
+      seen.add(parent.path);
+      trail.unshift(parent.name);
+    }
+    return trail;
+  };
+
+  const withTrail = entries.map((e) => ({ ...e, trail: trailOf(e), parentPath: parentOf(e)?.path ?? null }));
+  const kept = withTrail.filter((e) => config.maxDepth === undefined || e.trail.length < config.maxDepth);
+  const keptPaths = new Set(kept.map((e) => e.path));
+  const hasChildren = (path: string) => kept.some((other) => other.parentPath === path);
+
   const level = config.level ?? "leaf";
-  return entries
-    .filter((e) => (level === "leaf" ? !hasChildren(e.path) : level === "top" ? !parentOf(e.path) : true))
-    .map((e) => ({ url: e.url, name: e.name, trail: trailOf(e.path) }));
+  return kept
+    .filter((e) => (level === "leaf" ? !hasChildren(e.path) : level === "top" ? !e.parentPath || !keptPaths.has(e.parentPath) : true))
+    .map((e) => ({ url: e.url, name: e.name, trail: e.trail }));
 }

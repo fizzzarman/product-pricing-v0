@@ -62,7 +62,8 @@ export interface CategorySyncResult {
  * Reads every category from the retailer's site menu and merges it into
  * DataSource.config.categoryUrls. New categories are enabled and auto-mapped;
  * categories the admin already curated keep their mapping and on/off state;
- * ones that vanished from the site are kept but flagged, never silently dropped.
+ * ones that vanished from the site are kept, flagged and switched off, never
+ * silently dropped.
  */
 export async function discoverRetailerCategories(retailerId: string): Promise<CategorySyncResult> {
   const { retailer, dataSource } = await loadRetailer(retailerId);
@@ -92,7 +93,8 @@ export async function discoverRetailerCategories(retailerId: string): Promise<Ca
   });
 
   const missing = [...existing.values()].filter((c) => !foundUrls.has(c.url));
-  merged.push(...missing.map((c) => ({ ...c, notFoundOnSite: true })));
+  // Switched off so dead links aren't crawled; the admin can switch them back on.
+  merged.push(...missing.map((c) => ({ ...c, notFoundOnSite: true, enabled: false })));
 
   for (const category of merged) {
     if (category.enabled !== false) await ensureCategory(category.categorySlug, category.name ?? category.categorySlug);

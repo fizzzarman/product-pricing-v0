@@ -68,9 +68,11 @@ export const LIVE_RETAILER_PRESETS: LiveRetailerPreset[] = [
       maxDetailPagesPerRun: 40,
       listingParams: { limit: "90" },
       categoryDiscovery: {
-        // Star Tech's mega-menu. Leaf entries are the most specific pages (e.g. /component/processor),
-        // so nothing is crawled twice.
+        // Star Tech's mega-menu: Appliance › TV › Haier. Its URLs are flat (/haier-television), so the
+        // hierarchy comes from the nested menu lists. Level 3 is brand/filter pages whose products are
+        // all on the level-2 page, so only levels 1–2 are kept (~1,500 links → one page per category).
         linkSelector: "#main-nav a[href]",
+        maxDepth: 2,
         exclude: ["^/(information|account|tool|compare|offers?|blog|contact|checkout|cart|pc-builder|brands?)\\b", "route="],
         level: "leaf",
       },
