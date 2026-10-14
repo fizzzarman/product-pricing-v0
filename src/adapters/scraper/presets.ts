@@ -109,6 +109,8 @@ export const LIVE_RETAILER_PRESETS: LiveRetailerPreset[] = [
       categoryDiscovery: {
         linkSelector: 'a[href*="/category/"]',
         include: "^/category/.+",
+        // Ryans' third menu level is brand pages (All Laptop › Laptop Ram › ADATA); stop at level 2.
+        maxDepth: 2,
         level: "leaf",
       },
     },

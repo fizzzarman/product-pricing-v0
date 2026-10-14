@@ -43,3 +43,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# raw pages saved by `npm run scrape:check -- <retailer> --save`
+/scrape-debug/

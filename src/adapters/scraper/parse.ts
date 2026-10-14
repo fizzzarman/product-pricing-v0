@@ -291,3 +291,24 @@ export function extractCategoryLinks(
     .filter((e) => (level === "leaf" ? !hasChildren(e.path) : level === "top" ? !e.parentPath || !keptPaths.has(e.parentPath) : true))
     .map((e) => ({ url: e.url, name: e.name, trail: e.trail }));
 }
+
+/**
+ * Last-resort spec sheet: two-column rows inside anything whose id/class
+ * mentions "spec". Most retailer themes render specifications that way.
+ */
+export function guessSpecTable($: cheerio.CheerioAPI): Record<string, string> {
+  const specs: Record<string, string> = {};
+  $('[id*="spec"] tr, [class*="spec"] tr, [id*="Spec"] tr, [class*="Spec"] tr').each((_, row) => {
+    const cells = $(row).children("td, th");
+    if (cells.length !== 2) return;
+    const name = cleanText(cells.eq(0).text());
+    const value = cleanText(cells.eq(1).text());
+    if (name && value && name.length <= 80 && !(name in specs)) specs[name] = value;
+  });
+  return specs;
+}
+
+/** Listing cards often shorten long names ("Acer Aspire 3 ... 8G ..."); the product page has the full one. */
+export function looksTruncated(title: string): boolean {
+  return /\.\.\.|…/.test(title);
+}

@@ -6,6 +6,7 @@ import { computePriceSummary } from "@/lib/pricing/summary";
 import type { RetailerProduct } from "@/types";
 import type { RetailerAdapter } from "@/adapters/base/types";
 import { ensureCategory } from "@/lib/retailers/categories";
+import { looksTruncated } from "@/adapters/scraper/parse";
 import type { Availability } from "@/generated/prisma/client";
 
 export interface SeedQuery {
@@ -223,7 +224,8 @@ async function upsertListing(
         price: item.price,
         ...(oldPrice !== item.price ? { previousPrice: oldPrice } : {}),
         availability: item.availability,
-        title: item.title,
+        // Don't replace a full name from the product page with a shortened card title.
+        ...(looksTruncated(item.title) ? {} : { title: item.title }),
         ...(item.imageUrl ? { imageUrl: item.imageUrl } : {}),
         ...(item.description ? { description: item.description } : {}),
         ...(item.externalId ? { externalProductId: item.externalId } : {}),
@@ -285,7 +287,7 @@ async function enrichListingDetails(
       id: true,
       externalUrl: true,
       productId: true,
-      product: { select: { description: true, imageUrl: true, specifications: true } },
+      product: { select: { name: true, description: true, imageUrl: true, specifications: true } },
     },
   });
 
@@ -299,6 +301,7 @@ async function enrichListingDetails(
         data: {
           // Empty string marks "page fetched, no description found" so the listing isn't retried every run.
           description: detail.description ?? "",
+          title: detail.title,
           ...(detail.imageUrl ? { imageUrl: detail.imageUrl } : {}),
           ...(detail.availability !== "UNKNOWN" ? { availability: detail.availability } : {}),
           ...(detail.externalId ? { externalProductId: detail.externalId } : {}),
@@ -310,6 +313,7 @@ async function enrichListingDetails(
       await prisma.product.update({
         where: { id: listing.productId },
         data: {
+          ...(looksTruncated(listing.product.name) && !looksTruncated(detail.title) ? { name: detail.title } : {}),
           ...(!listing.product.description && detail.description ? { description: detail.description } : {}),
           ...(!listing.product.imageUrl && detail.imageUrl ? { imageUrl: detail.imageUrl } : {}),
           ...(Object.keys(scrapedSpecs).length > 0 ? { specifications: { ...scrapedSpecs, ...existingSpecs } } : {}),

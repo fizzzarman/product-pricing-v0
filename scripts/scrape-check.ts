@@ -1,3 +1,5 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { ScraperAdapter } from "../src/adapters/scraper/scraperAdapter";
 import { LIVE_RETAILER_PRESETS } from "../src/adapters/scraper/presets";
 
@@ -11,9 +13,12 @@ import { LIVE_RETAILER_PRESETS } from "../src/adapters/scraper/presets";
  *   npm run scrape:check -- startech            # first discovered category
  *   npm run scrape:check -- ryans 3             # 4th discovered category
  *   npm run scrape:check -- dazzle https://dazzle.com.bd/categories/phones
+ *   npm run scrape:check -- ryans --save        # also save the raw HTML to scrape-debug/
  */
 async function main() {
-  const [key, target] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const save = args.includes("--save");
+  const [key, target] = args.filter((a) => !a.startsWith("--"));
   const preset = LIVE_RETAILER_PRESETS.find((p) => p.key === key);
   if (!preset) {
     throw new Error(`Usage: scrape-check <${LIVE_RETAILER_PRESETS.map((p) => p.key).join("|")}> [categoryIndex|url]`);
@@ -39,7 +44,16 @@ async function main() {
     console.log();
   }
 
+  const saveHtml = async (kind: string, url: string) => {
+    if (!save) return;
+    mkdirSync("scrape-debug", { recursive: true });
+    const file = join("scrape-debug", `${preset.key}-${kind}.html`);
+    writeFileSync(file, await adapter.fetchHtml(url));
+    console.log(`  saved ${file}`);
+  };
+
   console.log(`Listing: ${listingUrl}`);
+  await saveHtml("listing", listingUrl);
   const products = await adapter.crawlListing(listingUrl, { maxPages: 1 });
   console.log(`  ${products.length} products parsed`);
   for (const p of products.slice(0, 5)) {
@@ -52,6 +66,7 @@ async function main() {
   }
 
   console.log(`\nProduct page: ${products[0].url}`);
+  await saveHtml("product", products[0].url);
   const detail = await adapter.getProduct(products[0].url);
   console.log(`  title:        ${detail.title}`);
   console.log(`  price:        ৳${detail.price}`);

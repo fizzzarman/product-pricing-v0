@@ -15,6 +15,7 @@ import {
   readableText,
   absoluteUrl,
   extractCategoryLinks,
+  guessSpecTable,
   type CategoryDiscoveryConfig,
   type DiscoveredCategory,
 } from "@/adapters/scraper/parse";
@@ -217,7 +218,12 @@ export class ScraperAdapter implements RetailerAdapter {
     if (availability === "UNKNOWN" && ld) availability = ld.availability;
 
     let description = s.description ? readableText($(s.description).first()) : "";
-    if (!description) description = ld?.description ?? cleanText($('meta[property="og:description"]').attr("content") ?? "");
+    if (!description) {
+      description =
+        ld?.description ||
+        cleanText($('meta[property="og:description"]').attr("content") ?? "") ||
+        cleanText($('meta[name="description"]').attr("content") ?? "");
+    }
 
     const images: string[] = [];
     if (s.images) {
@@ -241,6 +247,7 @@ export class ScraperAdapter implements RetailerAdapter {
       });
     }
     if (Object.keys(specifications).length === 0 && ld) specifications = ld.specifications;
+    if (Object.keys(specifications).length === 0) specifications = guessSpecTable($);
 
     return {
       externalId: ld?.sku ?? null,
@@ -294,11 +301,12 @@ export class ScraperAdapter implements RetailerAdapter {
   }
 
   /**
-   * Fetches a page, but only after confirming robots.txt allows it and
+   * Fetches a page (public so scripts/scrape-check.ts can save raw HTML), but
+   * only after confirming robots.txt allows it and
    * enforcing a minimum interval between requests to this host (spec §6:
    * respect robots.txt, rate limits, and retailer policies).
    */
-  private async fetchHtml(url: string): Promise<string> {
+  async fetchHtml(url: string): Promise<string> {
     const userAgent = this.config.userAgent ?? DEFAULT_USER_AGENT;
     const { allowed, crawlDelaySeconds } = await isScrapingAllowed(url, userAgent);
 

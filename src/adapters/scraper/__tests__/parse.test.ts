@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parsePrice, parseAvailabilityText, parseSchemaAvailability } from "../parse";
+import * as cheerio from "cheerio";
+import { parsePrice, parseAvailabilityText, parseSchemaAvailability, guessSpecTable, looksTruncated } from "../parse";
 
 describe("parsePrice", () => {
   it("takes the first price when sale and regular prices are side by side", () => {
@@ -37,5 +38,25 @@ describe("parseSchemaAvailability", () => {
     expect(parseSchemaAvailability("http://schema.org/OutOfStock")).toBe("OUT_OF_STOCK");
     expect(parseSchemaAvailability("PreOrder")).toBe("PRE_ORDER");
     expect(parseSchemaAvailability(undefined)).toBe("UNKNOWN");
+  });
+});
+
+describe("guessSpecTable", () => {
+  it("reads two-column rows inside spec containers only", () => {
+    const $ = cheerio.load(`
+      <div class="product-specification"><table>
+        <tr><th colspan="2">Processor</th></tr>
+        <tr><td>Processor Model</td><td>Ryzen 3 5300U</td></tr>
+        <tr><td>RAM</td><td>8GB</td></tr>
+      </table></div>
+      <table><tr><td>Delivery</td><td>2 days</td></tr></table>`);
+    expect(guessSpecTable($)).toEqual({ "Processor Model": "Ryzen 3 5300U", RAM: "8GB" });
+  });
+});
+
+describe("looksTruncated", () => {
+  it("spots shortened card titles", () => {
+    expect(looksTruncated("Acer Aspire 3 A325-42-V2 AMD Ryzen 3 5300U 8G ... 33.01.002.1139")).toBe(true);
+    expect(looksTruncated("Acer Aspire 3 A325-42-V2 Laptop")).toBe(false);
   });
 });
