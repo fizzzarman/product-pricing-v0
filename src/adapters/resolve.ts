@@ -1,7 +1,8 @@
-import type { DataSource } from "@prisma/client";
+import type { DataSource } from "@/generated/prisma/client";
 import type { RetailerAdapter } from "@/adapters/base/types";
 import { getAdapter } from "@/adapters/registry";
 import { ScraperAdapter, type ScraperAdapterConfig } from "@/adapters/scraper/scraperAdapter";
+import { LIVE_RETAILER_PRESETS } from "@/adapters/scraper/presets";
 
 /**
  * Mock and hand-written adapters are looked up by a fixed key in the static
@@ -15,11 +16,14 @@ export function resolveAdapterForDataSource(dataSource: DataSource, retailerName
     return getAdapter(dataSource.adapterKey);
   }
 
-  const config = dataSource.config as Partial<ScraperAdapterConfig> | null;
-  if (!config?.searchUrlTemplate || !config.searchSelectors) {
-    throw new Error(
-      `DataSource "${dataSource.name}" is type PERMITTED_SCRAPE but is missing searchUrlTemplate/searchSelectors in config`
-    );
+  // Built-in retailers (Star Tech, Ryans, Dazzle) take their preset as defaults, so a
+  // DataSource row saved by an older `seed:live` still picks up settings added since
+  // (e.g. categoryDiscovery). Anything stored in the row overrides the preset.
+  const preset = LIVE_RETAILER_PRESETS.find((p) => p.key === dataSource.adapterKey)?.config;
+  const stored = (dataSource.config as Partial<ScraperAdapterConfig> | null) ?? {};
+  const config = { ...preset, ...stored };
+  if (!config.searchSelectors) {
+    throw new Error(`DataSource "${dataSource.name}" is type PERMITTED_SCRAPE but is missing searchSelectors in config`);
   }
 
   return new ScraperAdapter({

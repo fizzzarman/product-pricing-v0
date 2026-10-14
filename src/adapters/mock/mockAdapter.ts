@@ -1,6 +1,6 @@
 import type { RetailerAdapter } from "@/adapters/base/types";
 import type { RetailerProduct } from "@/types";
-import type { Availability } from "@prisma/client";
+import type { Availability } from "@/generated/prisma/client";
 
 export interface MockCatalogEntry {
   externalId: string;

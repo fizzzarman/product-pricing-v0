@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import type { Availability } from "@prisma/client";
+import type { Availability } from "@/generated/prisma/client";
 
 const CONFIG: Record<Availability, { label: string; variant: "success" | "warning" | "muted" | "info" | "destructive" }> = {
   IN_STOCK: { label: "In Stock", variant: "success" },

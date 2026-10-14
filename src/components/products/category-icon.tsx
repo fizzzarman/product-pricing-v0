@@ -18,6 +18,9 @@ import {
   Wifi,
   Gamepad2,
   Package,
+  Smartphone,
+  Tablet,
+  Watch,
   type LucideIcon,
 } from "lucide-react";
 
@@ -42,6 +45,9 @@ const ICONS: Record<string, LucideIcon> = {
   Wifi,
   Gamepad2,
   Package,
+  Smartphone,
+  Tablet,
+  Watch,
 };
 
 export function CategoryIcon({ name, className }: { name: string | null | undefined; className?: string }) {

@@ -11,7 +11,10 @@ export function middleware(request: NextRequest) {
 
   if (pathname.startsWith("/admin")) {
     const cookie = request.cookies.get(ADMIN_COOKIE)?.value;
-    if (cookie !== process.env.ADMIN_SECRET) {
+    // Require ADMIN_SECRET to be set: otherwise a missing cookie (undefined)
+    // would equal the missing secret (undefined) and let anyone in.
+    const secret = process.env.ADMIN_SECRET;
+    if (!secret || cookie !== secret) {
       const loginUrl = new URL("/admin/login", request.url);
       loginUrl.searchParams.set("next", pathname);
       return NextResponse.redirect(loginUrl);

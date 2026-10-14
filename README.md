@@ -15,7 +15,7 @@ complete; later phases are in progress.
 - [x] **Phase 2** — Homepage, search, category pages, product pages, price comparison, price history, compare
 - [x] **Phase 3** — Admin dashboard (products, listings, retailers, data collection)
 - [x] **Phase 4** — SEO (metadata, JSON-LD, sitemap/robots), ISR caching
-- [ ] **Phase 5** — Real retailer adapter wiring (beyond the mock adapters already scaffolded)
+- [~] **Phase 5** — Live scraping of Star Tech, Ryans and Dazzle (config presets + category crawl + product-page enrichment; selectors need verifying against the live sites — see [Live retailers](#live-retailers-star-tech-ryans-dazzle))
 - [ ] **Phase 6** — Production deployment hardening, rate limiting, Sentry/analytics wiring
 
 ### Known gaps / not yet built
@@ -24,8 +24,8 @@ complete; later phases are in progress.
   `matchingStatus`/`matchConfidence` support this; the interaction hasn't been built)
 - User accounts, price alerts, and watchlists are schema-only (spec §24) — no UI/notifications
 - Integration and E2E tests (unit tests for pricing/matching logic exist — see [Testing](#testing))
-- Vercel Cron wiring for scheduled adapter refreshes (the adapter/DataSource/ScraperRun plumbing
-  is in place; no cron job calls it yet)
+- Product image galleries: only the primary image is stored (the schema has one `imageUrl`)
+- Listings that disappear from a retailer's site are not marked as delisted yet
 
 ## Tech stack
 
@@ -51,6 +51,7 @@ src/
   adapters/
     base/              # RetailerAdapter interface
     mock/              # Deterministic mock adapter + seed catalog (used until real adapters land)
+    scraper/           # Config-driven HTML scraper + presets for Star Tech / Ryans / Dazzle
     startech/ ryans/ techland/   # Placeholder real adapters (throw "not implemented")
     registry.ts        # Maps an adapterKey -> concrete adapter instance
   types/                # Shared domain types
@@ -72,8 +73,8 @@ required — see `adapters/base/types.ts` for the contract every adapter impleme
 2. Wait for provisioning, then open **Project Settings → Database → Connection string**.
 3. Copy the **pooled** connection string (port `6543`, "Transaction" mode) into
    `DATABASE_URL`, and the **direct** connection string (port `5432`) into `DIRECT_URL`.
-4. Nothing extra needs to be run manually in the SQL editor — `prisma migrate dev` enables
-   the `pg_trgm`/`unaccent` extensions declared in `schema.prisma` automatically.
+4. Nothing extra needs to be run manually in the SQL editor — the migrations enable the
+   `pg_trgm` extension that search and product matching rely on.
 
 ### 2. Configure environment variables
 
@@ -108,6 +109,9 @@ Open [http://localhost:3000](http://localhost:3000).
 | `npm run db:deploy`  | Apply migrations in production (CI/Vercel)  |
 | `npm run db:studio`  | Open Prisma Studio to browse the DB         |
 | `npm run seed`       | Re-run the mock data seed                   |
+| `npm run seed:live`  | Register Star Tech / Ryans / Dazzle as live scraped retailers |
+| `npm run scrape:check -- <startech\|ryans\|dazzle>` | Dry-run a retailer's selectors against the live site (no DB) |
+| `npm run sync [-- <retailer-slug>]` | Run a full sync from the CLI with no serverless time limit |
 
 ## Testing
 
@@ -199,6 +203,66 @@ JS-rendered single-page-app catalogs. Those need a headless-browser adapter run 
 external worker (see the original spec's §21 worker/queue diagram) rather than a Vercel
 serverless function, since bundling a full browser isn't a good fit there.
 
+## Live retailers (Star Tech, Ryans, Dazzle)
+
+Presets for the three live retailers live in `src/adapters/scraper/presets.ts`: CSS selectors
+for product cards and product pages, plus where to find the site's category menu.
+
+### All categories, managed from the admin
+
+Categories are not hard-coded. **Admin → Retailers → Categories → "Sync categories from site"**
+reads every category link from the retailer's navigation menu and stores the list on the
+retailer's data source. Then:
+
+- each category is auto-mapped to one of ours by keyword (`lib/retailers/categoryMapping.ts`,
+  using parent names too, so "Laptop › Asus" → Laptop). A category with no match (e.g. "UPS")
+  gets a new category of its own under **More Categories**;
+- all categories are **enabled** by default. Untick any you don't want, or pick a different
+  mapping, and press **Apply**;
+- re-syncing keeps your choices, re-maps categories you haven't changed by hand, adds new
+  categories the retailer has added, and flags ones that disappeared from the site (switching
+  them off) instead of deleting them. **Remove N no longer on the site** clears those, along
+  with any empty auto-created categories.
+
+Every enabled category is crawled page by page (`?page=N`), so the whole catalog is covered.
+Changing a category's mapping only affects products found after the change; products
+already imported keep their category (edit them under Admin → Products).
+
+Per product the scraper collects **price, availability, title, URL and image** from the
+listing grid, then opens a capped number of product pages per run
+(`maxDetailPagesPerRun`) to backfill **description, image and specifications**. Product pages
+fall back to schema.org JSON-LD and OpenGraph tags when a selector misses.
+
+```bash
+npm run scrape:check -- startech    # 1. check selectors against the live site (no DB needed)
+npm run scrape:check -- ryans
+npm run scrape:check -- dazzle
+npm run seed:live                   # 2. register the live retailers + sync their categories, retire mock data
+                                    # 3. review categories in Admin → Retailers → Categories
+npm run sync                        # 4. first full crawl from your machine (no time limit)
+```
+
+After that, the 3-hourly cron keeps prices and stock fresh. Crawling every category of a big
+site takes far longer than one serverless run allows. Expect the cron to need many runs to cover
+a full catalog, or schedule `npm run sync` on a machine or GitHub Actions instead. Each run has a time budget, starts
+one category further along than the previous run, and spends the last quarter of its budget on
+product-page enrichment, so a large catalog is covered across several runs.
+
+**Before relying on it:**
+
+- **Selectors are unverified.** They were written from each site's known markup, but the
+  build environment could not reach the sites. Run `scrape:check`, which also lists the
+  categories discovered from the menu, and fix any selector that returns 0 categories or products, either in `presets.ts` (then re-run `seed:live`) or directly in the
+  `DataSource.config` row.
+- **Status by retailer:** Star Tech is verified end to end. Ryans listing and product pages,
+  and Dazzle listing pages, are verified against saved pages. Dazzle product pages rely on
+  JSON-LD/OpenGraph fallbacks until checked with `scrape:check -- dazzle --save`.
+- **Check each site's Terms of Service.** `robots.txt` is honored automatically, including
+  `Crawl-delay`, and requests are spaced ≥ 2 s apart. A disallowed path is skipped, not
+  scraped.
+- **Images:** `next.config.ts` allows images from the three retailers' domains. If a retailer
+  serves images from a separate CDN host, add that host there or `next/image` will error.
+
 ## Deploying to Vercel
 
 1. Push this repo to GitHub.
@@ -216,12 +280,10 @@ Vercel serverless functions plus (later) Vercel Cron for lightweight scheduled r
 
 ## Data sources & retailer integrations
 
-All retailer data in this repo currently comes from **deterministic mock adapters**
-(`src/adapters/mock`), not live scraping. This is intentional: confirming the legal/
-technical basis (official API, affiliate feed, merchant feed, or permitted scraping with
-robots.txt/ToS compliance) is required before integrating any real Bangladeshi retailer.
-See the comments in `src/adapters/startech/index.ts` for the checklist to follow when a
-real integration is greenlit.
+`npm run seed` loads **deterministic mock data** (`src/adapters/mock`). `npm run seed:live`
+switches Star Tech, Ryans and Dazzle to live scraping (see [Live retailers](#live-retailers-star-tech-ryans-dazzle)).
+Before enabling a retailer in production, confirm the legal/technical basis: an official API
+or feed if one exists, otherwise permitted scraping with robots.txt/ToS compliance.
 
 ## Note on shadcn/ui
 

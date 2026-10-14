@@ -1,65 +1,125 @@
 /**
- * Minimal robots.txt parser covering what we actually need: is a given path
- * allowed for our user-agent (or "*"), and is there a Crawl-delay we should
- * respect. Not a full spec implementation (no wildcard/`$` matching) — good
- * enough to fail safe (disallow) rather than to be a complete crawler-grade
- * parser. If it can't parse or fetch robots.txt, it defaults to disallowing,
- * since the legal/technical requirement (spec §6) is to err on the side of
- * caution, not assume permission.
+ * Small robots.txt parser covering what we actually need: is a given path
+ * allowed for our user-agent, and is there a Crawl-delay we should respect.
+ *
+ * Follows the parts of RFC 9309 that matter for a polite crawler:
+ *  - consecutive `User-agent` lines form one group;
+ *  - the most specific matching group wins (our bot's token over `*`);
+ *  - `*` wildcards and a trailing `$` anchor are supported in paths;
+ *  - the longest matching rule wins, with Allow winning ties.
+ *
+ * If robots.txt can't be fetched because of a network error it fails safe
+ * (disallow everything) rather than assuming permission (spec §6). A 4xx
+ * response conventionally means "no restrictions".
  */
 
-interface RobotsRules {
+export interface RobotsRules {
   disallow: string[];
   allow: string[];
   crawlDelaySeconds: number | null;
 }
 
+interface RobotsGroup extends RobotsRules {
+  agents: string[];
+}
+
 const cache = new Map<string, { rules: RobotsRules; fetchedAt: number }>();
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour — avoid refetching robots.txt on every sync run
+
+/** The product token robots.txt groups are matched against, e.g. "DaamKotoBot/1.0 (+url)" → "daamkotobot". */
+function productToken(userAgent: string): string {
+  return userAgent.split(/[\s/]/)[0].toLowerCase();
+}
+
+export function parseRobotsTxt(body: string, userAgent: string): RobotsRules {
+  const groups: RobotsGroup[] = [];
+  let current: RobotsGroup | null = null;
+  let lastLineWasAgent = false;
+
+  for (const rawLine of body.split(/\r?\n/)) {
+    const line = rawLine.split("#")[0].trim();
+    if (!line) continue;
+    const separator = line.indexOf(":");
+    if (separator === -1) continue;
+    const key = line.slice(0, separator).trim().toLowerCase();
+    const value = line.slice(separator + 1).trim();
+
+    if (key === "user-agent") {
+      if (!current || !lastLineWasAgent) {
+        current = { agents: [], disallow: [], allow: [], crawlDelaySeconds: null };
+        groups.push(current);
+      }
+      current.agents.push(value.toLowerCase());
+      lastLineWasAgent = true;
+      continue;
+    }
+
+    lastLineWasAgent = false;
+    if (!current) continue;
+
+    if (key === "disallow" && value) current.disallow.push(value);
+    else if (key === "allow" && value) current.allow.push(value);
+    else if (key === "crawl-delay") {
+      const seconds = Number(value);
+      if (Number.isFinite(seconds)) current.crawlDelaySeconds = seconds;
+    }
+  }
+
+  const token = productToken(userAgent);
+  const specific = groups.filter((g) => g.agents.some((a) => a !== "*" && token.startsWith(a)));
+  const applicable = specific.length > 0 ? specific : groups.filter((g) => g.agents.includes("*"));
+
+  return {
+    disallow: applicable.flatMap((g) => g.disallow),
+    allow: applicable.flatMap((g) => g.allow),
+    crawlDelaySeconds: applicable.reduce<number | null>(
+      (max, g) => (g.crawlDelaySeconds !== null && (max === null || g.crawlDelaySeconds > max) ? g.crawlDelaySeconds : max),
+      null
+    ),
+  };
+}
+
+/** Converts a robots.txt path pattern (with `*` and optional trailing `$`) into an anchored RegExp. */
+function patternToRegExp(pattern: string): RegExp {
+  const anchored = pattern.endsWith("$");
+  const body = (anchored ? pattern.slice(0, -1) : pattern)
+    .split("*")
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+    .join(".*");
+  return new RegExp(`^${body}${anchored ? "$" : ""}`);
+}
+
+export function isPathAllowed(rules: RobotsRules, path: string): boolean {
+  const longestMatch = (patterns: string[]) =>
+    patterns.filter((p) => patternToRegExp(p).test(path)).reduce((max, p) => Math.max(max, p.length), -1);
+
+  const disallowLength = longestMatch(rules.disallow);
+  if (disallowLength === -1) return true;
+  return longestMatch(rules.allow) >= disallowLength;
+}
 
 async function fetchRobotsRules(origin: string, userAgent: string): Promise<RobotsRules> {
   const cached = cache.get(origin);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) return cached.rules;
 
-  const rules: RobotsRules = { disallow: [], allow: [], crawlDelaySeconds: null };
-
+  let rules: RobotsRules;
   try {
     const res = await fetch(`${origin}/robots.txt`, {
       headers: { "User-Agent": userAgent },
       signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) {
-      // No robots.txt (404) is conventionally treated as "everything allowed".
-      cache.set(origin, { rules, fetchedAt: Date.now() });
-      return rules;
-    }
-
-    const body = await res.text();
-    let applies = false;
-
-    for (const rawLine of body.split("\n")) {
-      const line = rawLine.split("#")[0].trim();
-      if (!line) continue;
-      const [rawKey, ...rest] = line.split(":");
-      const key = rawKey.trim().toLowerCase();
-      const value = rest.join(":").trim();
-
-      if (key === "user-agent") {
-        applies = value === "*" || value.toLowerCase() === userAgent.toLowerCase();
-      } else if (applies && key === "disallow" && value) {
-        rules.disallow.push(value);
-      } else if (applies && key === "allow" && value) {
-        rules.allow.push(value);
-      } else if (applies && key === "crawl-delay") {
-        const seconds = Number(value);
-        if (!Number.isNaN(seconds)) rules.crawlDelaySeconds = seconds;
-      }
+    if (res.status >= 500) {
+      // Server error: treat as temporarily disallowed, per RFC 9309 §2.3.1.4.
+      rules = { disallow: ["/"], allow: [], crawlDelaySeconds: null };
+    } else if (!res.ok) {
+      // No robots.txt (4xx) is conventionally treated as "everything allowed".
+      rules = { disallow: [], allow: [], crawlDelaySeconds: null };
+    } else {
+      rules = parseRobotsTxt(await res.text(), userAgent);
     }
   } catch {
-    // Network failure fetching robots.txt — fail safe: no rules cached, and
-    // isPathAllowed() below defaults to disallow when rules are empty AND
-    // the fetch itself failed (tracked via the thrown flag below).
-    rules.disallow.push("/");
+    // Network failure fetching robots.txt — fail safe.
+    rules = { disallow: ["/"], allow: [], crawlDelaySeconds: null };
   }
 
   cache.set(origin, { rules, fetchedAt: Date.now() });
@@ -72,19 +132,7 @@ export async function isScrapingAllowed(
 ): Promise<{ allowed: boolean; crawlDelaySeconds: number | null }> {
   const parsed = new URL(url);
   const rules = await fetchRobotsRules(parsed.origin, userAgent);
-
-  const path = parsed.pathname + parsed.search;
-  const matchingDisallow = rules.disallow
-    .filter((rule) => path.startsWith(rule))
-    .sort((a, b) => b.length - a.length)[0];
-  const matchingAllow = rules.allow
-    .filter((rule) => path.startsWith(rule))
-    .sort((a, b) => b.length - a.length)[0];
-
-  // Longest matching rule wins, per the de facto robots.txt convention.
-  const allowed = !matchingDisallow || (matchingAllow?.length ?? -1) >= matchingDisallow.length;
-
-  return { allowed, crawlDelaySeconds: rules.crawlDelaySeconds };
+  return { allowed: isPathAllowed(rules, parsed.pathname + parsed.search), crawlDelaySeconds: rules.crawlDelaySeconds };
 }
 
 export function sleep(ms: number) {

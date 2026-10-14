@@ -1,5 +1,6 @@
 import type { RetailerProduct } from "@/types";
-import type { Availability } from "@prisma/client";
+import type { DiscoveredCategory } from "@/adapters/scraper/parse";
+import type { Availability } from "@/generated/prisma/client";
 
 /**
  * Contract every retailer integration implements, whether it's backed by an
@@ -16,7 +17,20 @@ export interface RetailerAdapter {
   /** Search the retailer's catalog for a free-text query. */
   searchProducts(query: string): Promise<RetailerProduct[]>;
 
-  /** Fetch full details for a single product page URL. */
+  /**
+   * Walk a category/listing page (following pagination) and return every
+   * product card found. Optional — only adapters that can enumerate a
+   * catalog implement it; the sync job uses it for DataSource.config.categoryUrls.
+   */
+  crawlListing?(
+    listingUrl: string,
+    options?: { maxPages?: number; shouldContinue?: () => boolean }
+  ): Promise<RetailerProduct[]>;
+
+  /** List every category on the retailer's site (from its navigation menu). Optional. */
+  discoverCategories?(): Promise<DiscoveredCategory[]>;
+
+  /** Fetch full details (description, images, specs) for a single product page URL. */
   getProduct(url: string): Promise<RetailerProduct>;
 
   /** Re-check availability only, for cheap/frequent freshness refreshes. */

@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type Availability } from "../src/generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 
 import { CANONICAL_PRODUCTS } from "../src/adapters/mock/seedData";
