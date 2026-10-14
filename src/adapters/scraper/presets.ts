@@ -85,23 +85,25 @@ export const LIVE_RETAILER_PRESETS: LiveRetailerPreset[] = [
     websiteUrl: RYANS,
     config: {
       searchUrlTemplate: `${RYANS}/search?q={query}`,
+      // Verified against saved Ryans pages (Oct 2026).
       searchSelectors: {
         item: ".category-single-product",
-        title: ".product-title, .card-text a",
-        price: ".pr-text",
-        url: ".image-box a, .product-title a, .card-text a",
+        // The grid-view name is shortened ("... 8G ..."); the list-view link holds the full name.
+        title: ".list-view-text a",
+        price: ".cat-sp-text",
+        url: ".image-box a",
         image: ".image-box img",
-        availabilityText: ".stock-text, .product-stock, .cart-btn",
+        inStock: 'form[action*="add-to-cart"]',
       },
       productSelectors: {
         title: "h1",
-        price: ".new-reg-text, .rp-block .pr-text, .price-block .pr-text",
-        availabilityText: ".stock-text, .product-stock",
-        description: ".overview-text, #description, .product-description",
-        images: ".product-img-slider img, .basic-information-img img",
-        specRow: ".specification-table tr, .table-hover tr",
-        specName: "td:nth-child(1), .att-title",
-        specValue: "td:nth-child(2), .att-value",
+        price: ".new-sp-text",
+        // Stock comes from the page's schema.org microdata (itemprop="availability").
+        description: ".overview .short-desc-attr",
+        images: "#slideshow-items-container img",
+        specRow: ".specification-table .table-hr-remove",
+        specName: ".att-title",
+        specValue: ".att-value",
       },
       minRequestIntervalMs: 2000,
       maxDetailPagesPerRun: 40,
@@ -121,24 +123,24 @@ export const LIVE_RETAILER_PRESETS: LiveRetailerPreset[] = [
     slug: "dazzle",
     websiteUrl: DAZZLE,
     config: {
-      // Dazzle's catalog appears to be rendered client-side; search engines index its category
-      // pages with navigation only. If the first sync reports 0 products, this retailer needs
-      // its JSON API (check the browser network tab) or a headless-browser adapter instead.
+      // Verified against a saved Dazzle category page (Oct 2026): a server-rendered Next.js grid.
       searchSelectors: {
-        item: ".product-card, [class*='ProductCard'], [class*='product-card']",
-        title: "h2, h3, [class*='title'], [class*='name']",
-        price: "[class*='price']",
-        url: "a[href*='/products/'], a[href*='/product/'], a",
+        item: "[data-product-uuid]",
+        // The <h3> text also contains the stock label, so read the name from its title attribute.
+        title: "h3[title]",
+        titleAttr: "title",
+        price: 'a.items-baseline > span:first-child',
+        url: 'a[href^="/product/"]',
         image: "img",
-        availabilityText: "[class*='stock'], button",
+        availabilityText: "h3 > span:last-child",
       },
+      // Product pages weren't sampled yet; these fall back to JSON-LD / OpenGraph.
       productSelectors: {
         title: "h1",
-        price: "[class*='price']",
-        availabilityText: "[class*='stock']",
         description: "[class*='description']",
-        images: "[class*='gallery'] img, [class*='slider'] img",
       },
+      // 12 products per page and ~1,200 phones: allow ~100+ pages per category.
+      maxPagesPerCategory: 150,
       minRequestIntervalMs: 2000,
       maxDetailPagesPerRun: 40,
       categoryDiscovery: {

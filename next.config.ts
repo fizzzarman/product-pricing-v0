@@ -12,6 +12,7 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "**.ryans.com" },
       { protocol: "https", hostname: "dazzle.com.bd" },
       { protocol: "https", hostname: "**.dazzle.com.bd" },
+      { protocol: "https", hostname: "dazzle.sgp1.cdn.digitaloceanspaces.com" },
     ],
   },
 };

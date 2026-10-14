@@ -82,9 +82,16 @@ export function readImageUrl($img: cheerio.Cheerio<any>, baseUrl: string, prefer
     if (!value) continue;
     if (attr === "srcset") value = value.split(",")[0].trim().split(/\s+/)[0];
     const url = absoluteUrl(value, baseUrl);
-    if (url) return url;
+    if (url) return unwrapImageProxy(url);
   }
   return null;
+}
+
+/** Next.js serves images through /_next/image?url=<original>; store the original instead. */
+export function unwrapImageProxy(url: string): string {
+  const parsed = new URL(url);
+  const original = parsed.pathname === "/_next/image" ? parsed.searchParams.get("url") : null;
+  return original ? absoluteUrl(original, url) ?? url : url;
 }
 
 export function cleanText(text: string): string {
@@ -138,6 +145,7 @@ export function extractJsonLdProducts($: cheerio.CheerioAPI, baseUrl: string): J
     if (node["@graph"]) visit(node["@graph"]);
     if (node.itemListElement) visit(node.itemListElement);
     if (node.item) visit(node.item);
+    if (node.itemReviewed) visit(node.itemReviewed); // Ryans wraps its Product in a Review
   };
 
   $('script[type="application/ld+json"]').each((_, el) => {
@@ -311,4 +319,28 @@ export function guessSpecTable($: cheerio.CheerioAPI): Record<string, string> {
 /** Listing cards often shorten long names ("Acer Aspire 3 ... 8G ..."); the product page has the full one. */
 export function looksTruncated(title: string): boolean {
   return /\.\.\.|…/.test(title);
+}
+
+export interface MicrodataOffer {
+  price: number | null;
+  availability: Availability;
+  images: string[];
+}
+
+/** schema.org microdata (itemprop="price" / "availability" / "image"), used by e.g. Ryans. */
+export function extractMicrodata($: cheerio.CheerioAPI, baseUrl: string): MicrodataOffer {
+  const attrOf = (selector: string) => {
+    const $el = $(selector).first();
+    return $el.attr("content") ?? $el.attr("href") ?? $el.text();
+  };
+  const images: string[] = [];
+  $('[itemprop="image"]').each((_, el) => {
+    const url = absoluteUrl($(el).attr("content") ?? $(el).attr("src"), baseUrl);
+    if (url && !images.includes(url)) images.push(url);
+  });
+  return {
+    price: parsePrice(attrOf('[itemprop="offers"] [itemprop="price"], [itemprop="price"]')),
+    availability: parseSchemaAvailability(attrOf('[itemprop="availability"]') || undefined),
+    images,
+  };
 }

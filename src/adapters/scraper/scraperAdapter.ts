@@ -15,6 +15,7 @@ import {
   readableText,
   absoluteUrl,
   extractCategoryLinks,
+  extractMicrodata,
   guessSpecTable,
   type CategoryDiscoveryConfig,
   type DiscoveredCategory,
@@ -27,8 +28,9 @@ const MAX_DESCRIPTION_LENGTH = 5000;
 export interface SelectorSet {
   /** CSS selector matching one product "card" within a search/listing page. */
   item: string;
-  /** Selector for the title text, relative to `item`. */
+  /** Selector for the title text, relative to `item`. Reads the text unless titleAttr is set. */
   title: string;
+  titleAttr?: string;
   /** Selector for the price text, relative to `item`. The first number found is used. */
   price: string;
   /** Selector for the product link, relative to `item`. Reads `href` unless urlAttr is set. */
@@ -41,6 +43,8 @@ export interface SelectorSet {
   availabilityText?: string;
   /** Selector that, when it matches the item itself or something inside it, marks the item out of stock (e.g. WooCommerce's `.outofstock`). */
   outOfStock?: string;
+  /** Selector whose presence marks the item in stock (e.g. an add-to-cart form), when no stock text is shown. */
+  inStock?: string;
 }
 
 /** Selectors for a single product detail page. Every field is optional — JSON-LD fills the gaps. */
@@ -71,6 +75,8 @@ export interface ScraperAdapterConfig {
   categoryDiscovery?: CategoryDiscoveryConfig;
   /** Query-string parameter used for listing pagination. Defaults to "page". */
   pageParam?: string;
+  /** Page cap per category listing (default 50). Raise it for sites with small pages. */
+  maxPagesPerCategory?: number;
   /** Extra query parameters added to every category listing URL, e.g. { limit: "90" } for bigger pages. */
   listingParams?: Record<string, string>;
   /** Substrings (case-insensitive) in availability text. Defaults to a common EN/BN set. */
@@ -127,7 +133,7 @@ export class ScraperAdapter implements RetailerAdapter {
     listingUrl: string,
     options: { maxPages?: number; shouldContinue?: () => boolean } = {}
   ): Promise<RetailerProduct[]> {
-    const maxPages = options.maxPages ?? 20;
+    const maxPages = options.maxPages ?? this.config.maxPagesPerCategory ?? 50;
     const pageParam = this.config.pageParam ?? "page";
     const byUrl = new Map<string, RetailerProduct>();
 
@@ -207,14 +213,16 @@ export class ScraperAdapter implements RetailerAdapter {
     const $ = cheerio.load(html);
     const s = this.config.productSelectors ?? {};
     const ld = extractJsonLdProducts($, url)[0];
+    const micro = extractMicrodata($, url);
     const text = (selector?: string) => (selector ? cleanText($(selector).first().text()) : "");
 
     const title = text(s.title) || ld?.name || cleanText($('meta[property="og:title"]').attr("content") ?? "");
-    const price = parsePrice(text(s.price)) ?? ld?.price ?? null;
+    const price = parsePrice(text(s.price)) ?? micro.price ?? ld?.price ?? null;
     if (!title || !price) return null;
 
     const availabilityText = s.availabilityText ? cleanText($(s.availabilityText).text()) : "";
     let availability = parseAvailabilityText(availabilityText, this.keywords);
+    if (availability === "UNKNOWN") availability = micro.availability;
     if (availability === "UNKNOWN" && ld) availability = ld.availability;
 
     let description = s.description ? readableText($(s.description).first()) : "";
@@ -232,6 +240,7 @@ export class ScraperAdapter implements RetailerAdapter {
         if (src && !images.includes(src)) images.push(src);
       });
     }
+    if (images.length === 0) images.push(...micro.images);
     if (images.length === 0 && ld) images.push(...ld.images);
     if (images.length === 0) {
       const og = absoluteUrl($('meta[property="og:image"]').attr("content"), url);
@@ -268,7 +277,8 @@ export class ScraperAdapter implements RetailerAdapter {
     $scope: cheerio.Cheerio<any>, // eslint-disable-line @typescript-eslint/no-explicit-any -- cheerio element type varies by selection
     selectors: SelectorSet
   ): RetailerProduct | null {
-    const title = cleanText($scope.find(selectors.title).first().text());
+    const $title = $scope.find(selectors.title).first();
+    const title = cleanText((selectors.titleAttr ? $title.attr(selectors.titleAttr) : undefined) ?? $title.text());
     const price = parsePrice($scope.find(selectors.price).first().text());
 
     const $urlEl = $scope.find(selectors.url).first();
@@ -285,6 +295,9 @@ export class ScraperAdapter implements RetailerAdapter {
       availability = "OUT_OF_STOCK";
     } else if (selectors.availabilityText) {
       availability = parseAvailabilityText($scope.find(selectors.availabilityText).text(), this.keywords);
+    }
+    if (availability === "UNKNOWN" && selectors.inStock && $scope.find(selectors.inStock).length > 0) {
+      availability = "IN_STOCK";
     }
 
     return {

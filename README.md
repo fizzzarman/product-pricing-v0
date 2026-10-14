@@ -252,9 +252,9 @@ product-page enrichment, so a large catalog is covered across several runs.
   build environment could not reach the sites. Run `scrape:check`, which also lists the
   categories discovered from the menu, and fix any selector that returns 0 categories or products, either in `presets.ts` (then re-run `seed:live`) or directly in the
   `DataSource.config` row.
-- **Dazzle appears to render its catalog client-side.** Search engines index its category
-  pages with navigation only. If `scrape:check -- dazzle` finds 0 products, Dazzle needs its
-  JSON API (look in the browser's network tab) or a headless-browser worker instead.
+- **Status by retailer:** Star Tech is verified end to end. Ryans listing and product pages,
+  and Dazzle listing pages, are verified against saved pages. Dazzle product pages rely on
+  JSON-LD/OpenGraph fallbacks until checked with `scrape:check -- dazzle --save`.
 - **Check each site's Terms of Service.** `robots.txt` is honored automatically, including
   `Crawl-delay`, and requests are spaced ≥ 2 s apart. A disallowed path is skipped, not
   scraped.
