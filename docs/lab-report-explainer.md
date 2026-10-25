@@ -15,20 +15,21 @@
 6. [User flows](#6-user-flows)
 7. [Sample output (Bangla & English)](#7-sample-output-bangla--english)
 8. [Technical architecture](#8-technical-architecture)
-9. [Data model](#9-data-model)
-10. [Clinical safety design](#10-clinical-safety-design)
-11. [Regulation & compliance](#11-regulation--compliance)
-12. [Security & privacy](#12-security--privacy)
-13. [Business model & pricing](#13-business-model--pricing)
-14. [Unit economics](#14-unit-economics)
-15. [Go-to-market plan](#15-go-to-market-plan)
-16. [Competition & moat](#16-competition--moat)
-17. [Roadmap](#17-roadmap)
-18. [Team & budget](#18-team--budget)
-19. [Metrics (KPIs)](#19-metrics-kpis)
-20. [Risks & mitigations](#20-risks--mitigations)
-21. [Pitch for diagnostic centers](#21-pitch-for-diagnostic-centers)
-22. [Next steps checklist](#22-next-steps-checklist)
+9. [Data & OCR strategy](#9-data--ocr-strategy)
+10. [Data model](#10-data-model)
+11. [Clinical safety design](#11-clinical-safety-design)
+12. [Regulation & compliance](#12-regulation--compliance)
+13. [Security & privacy](#13-security--privacy)
+14. [Business model & pricing](#14-business-model--pricing)
+15. [Unit economics](#15-unit-economics)
+16. [Go-to-market plan](#16-go-to-market-plan)
+17. [Competition & moat](#17-competition--moat)
+18. [Roadmap](#18-roadmap)
+19. [Team & budget](#19-team--budget)
+20. [Metrics (KPIs)](#20-metrics-kpis)
+21. [Risks & mitigations](#21-risks--mitigations)
+22. [Pitch for diagnostic centers](#22-pitch-for-diagnostic-centers)
+23. [Next steps checklist](#23-next-steps-checklist)
 
 ---
 
@@ -312,7 +313,7 @@ Lab/clinic dashboard alert → staff calls patient (configurable)
 | LLM | A capable LLM API with **zero data retention** and no training on your data, or a self-hosted open model for strict data locality |
 | Messaging | WhatsApp Business Platform (via Meta or a local BSP), local SMS gateway |
 | Payments | bKash / Nagad merchant APIs, SSLCommerz for cards |
-| Hosting | Local Bangladeshi data center or a cloud region that satisfies the data-localisation rules (see §11) |
+| Hosting | Local Bangladeshi data center or a cloud region that satisfies the data-localisation rules (see §12) |
 | Monitoring | Sentry, uptime monitoring, audit logs |
 
 ### 8.4 Rules engine example
@@ -344,7 +345,118 @@ def classify(value, low, high, crit_low=None, crit_high=None, mild_margin=0.10):
 
 ---
 
-## 9. Data model
+## 9. Data & OCR strategy
+
+> **Key decision:** we do **not** train our own OCR model or collect a huge medical dataset to start. We use ready-made OCR and AI models, a small doctor-reviewed test catalog, and a strong **validation layer**. Training our own model is a later optimisation, once we have volume.
+
+### 9.1 How products like this usually work
+This is the common industry pattern, not the confirmed internal setup of any specific company.
+
+| Layer | Typical approach | Train our own? |
+|---|---|---|
+| Reading the report | Cloud OCR or document-reading services (Google Document AI, Azure AI Document Intelligence, AWS Textract), or open-source tools (PaddleOCR, docTR, Tesseract) | ❌ Not at the start |
+| Understanding the table | A vision-capable AI model that reads the page and returns structured data (test, value, unit, range) | ❌ Use as-is with good prompts |
+| Medical knowledge | A **curated test catalog** of about 100–300 tests, written and reviewed by doctors | ❌ Written, not trained |
+| Normal or abnormal | Simple rules using the **lab's printed reference range** | ❌ No ML needed |
+| Explanation text | An AI model writing from structured facts, plus reviewed templates | ❌ Use as-is |
+| Integration | Large players connect directly to the lab's software (LIS) using HL7 or FHIR, so **no OCR at all** | — |
+
+### 9.2 Why we don't need vast data
+1. **Most Bangladeshi lab reports are already digital PDFs.** Lab software creates PDFs that contain real text, not pictures of text. We can read it directly (`pdfplumber`, `PyMuPDF`) with essentially 100% accuracy and no OCR. OCR is only needed for **phone photos and scans**.
+2. **There are only a limited number of report layouts.** Each lab uses one or two layouts. A small parser for each one covers most of the market after about 20–30 labs.
+3. **The medical knowledge is small and fixed.** About 150 common tests cover the vast majority of reports. For each test we need a Bangla and English name, aliases ("SGPT" = "ALT"), units, a one-line meaning, and doctor-approved questions to ask. That's a **spreadsheet the advisors write**, not "big data".
+4. **Reference ranges come printed on the report.** We use the lab's own range, so we don't need population data.
+
+**Public sources for the test catalog:**
+- **LOINC**: standard test codes and names
+- **MedlinePlus Lab Tests** (US National Library of Medicine): plain-language explanations
+- **WHO dengue guidance**, and **ADA / IDF** guidance for HbA1c and diabetes
+- **Bangladeshi national guidelines** (DGHS) where available
+- All content is rewritten in simple Bangla/English and **signed off by our clinical advisors**.
+
+### 9.3 Data we actually need
+| Data | Amount | Purpose |
+|---|---|---|
+| Anonymised sample reports (digital PDFs) | **200–500** from **10–20 labs** | Build parsers and **test accuracy** (an evaluation set, not training data) |
+| Phone photos / scans of printed reports | 100–200 (different phones, lighting, folded or creased paper) | Test how photo reading holds up |
+| Hand-checked correct values (ground truth) | Same set | Measure extraction accuracy |
+| Test catalog | ~150 tests | Explanations and questions |
+
+**How we collect it:** written permission or a data-sharing agreement with each lab. Remove names, phone numbers, ID numbers and addresses before use, and store the files encrypted with restricted access.
+
+### 9.4 Layered extraction approach
+Use the most accurate route first, and fall back only when needed:
+
+```
+1. Lab software integration (API / HL7 / FHIR)  → perfect data, no OCR        [large labs, v2+]
+2. Digital PDF with real text → direct text parse + per-lab template          [MVP main route]
+3. Unknown digital PDF → AI model extracts the table to structured data        [MVP fallback]
+4. Photo / scan → image quality check → vision AI model or OCR service         [MVP, with checks]
+        ↓
+   Validation layer (always runs, see 9.5)
+        ↓
+   Passed        → rules engine → explanation
+   Low confidence → "Please confirm these values" (patient/staff) or "Couldn't read clearly"
+```
+
+**Per-lab templates:** when a new lab is onboarded, we map its PDF layout once (column positions, test-name aliases, unit format). Every later report from that lab is parsed deterministically. The AI fallback handles unknown layouts until a template is added.
+
+### 9.5 Validation layer (our real advantage)
+We spend our effort here, not on training models.
+
+| Check | Example |
+|---|---|
+| **Unit matches the catalog** | Hb must be g/dL (or g/L, which is converted), not mg/dL |
+| **Physically possible values** | Hb 102 g/dL is impossible → treat as a misread (probably 10.2) and ask for confirmation, never guess |
+| **Lab's H/L flags agree** | If the report prints "L" but our computed status is normal → flag for review |
+| **Internal consistency** | WBC differential adds up to ≈ 100%; MCHC ≈ Hb ÷ HCT × 100; MCV ≈ HCT ÷ RBC × 10 |
+| **Reference range is sensible** | Low limit < high limit, same unit as the value |
+| **Two-pass agreement** | Read the page twice (OCR + vision model, or two prompts) and flag any mismatch |
+| **Completeness** | Expected tests for a panel are present (e.g., a CBC without platelets → check) |
+| **Patient/staff confirmation (photos)** | "We read Hb = 10.2 g/dL. Is this correct?" |
+
+**Accuracy targets (on the evaluation set):**
+- Digital PDFs: ≥ 99.5% of values correct
+- Photos: ≥ 98% correct **after** validation, with the rest caught and sent for confirmation
+- **Zero** silently wrong critical values (any doubt → confirmation or manual review)
+
+### 9.6 Build vs. buy comparison
+Rough estimates only.
+
+| Approach | Upfront cost | Cost per report | Accuracy | Time to launch |
+|---|---|---|---|---|
+| Train our own OCR from scratch | Very high (data, ML team, months) | Low | Uncertain at first | 6–12+ months |
+| Digital PDF parsing | Low | ~Free | ~100% | Weeks |
+| Cloud OCR or AI model + validation | Low | Small (a few Taka or less) | High, with checks | Weeks |
+| Self-hosted open-source OCR | Medium (servers, setup) | Low | Medium–high | 1–3 months |
+
+### 9.7 When to train our own model (later)
+Only when one of these is true:
+- **High volume** (around 100,000+ reports per month) makes per-call service costs significant.
+- **Privacy or data-localisation rules** require everything to run on our own servers in Bangladesh.
+- **Photo accuracy** from ready-made services isn't good enough for Bangladeshi printouts.
+
+At that point we fine-tune an **open-source document model** (for example PaddleOCR, or a small open vision-language model) on the thousands of reports collected during operation. That needs patient consent and lab agreements that allow it.
+
+### 9.8 Privacy note for OCR and AI services
+Cloud OCR and AI services usually process data **outside Bangladesh**. Before launch:
+- [ ] Check whether the data protection law requires health data to stay in the country (see §12)
+- [ ] Use vendors that **don't keep or train on our data**, and sign data processing agreements with them
+- [ ] Remove names, phone numbers and IDs (crop the header or mask it) before sending a page out, where possible
+- [ ] Keep a **self-hosted open-source option** ready for large hospitals or a strict legal reading
+
+### 9.9 Summary
+1. Start with **digital PDF parsing**, which needs no OCR.
+2. Use **ready-made OCR or vision AI models** for photos.
+3. Put the effort into the **validation layer** and a **doctor-reviewed test catalog**.
+4. Collect **200–500 real reports** to test accuracy, not to train.
+5. **Train our own model only after** we have volume, real data and a clear reason.
+
+This gets us to a pilot in about **2–3 months instead of 12**.
+
+---
+
+## 10. Data model
 
 ```text
 Organization      (id, name, type[lab|clinic|hospital], logo, branding, settings, plan)
@@ -366,9 +478,9 @@ AuditLog          (id, actor, action, entity, entity_id, timestamp, ip)
 
 ---
 
-## 10. Clinical safety design
+## 11. Clinical safety design
 
-### 10.1 Safety rules
+### 11.1 Safety rules
 1. **Lab's reference range wins.** Never replace it with a "generic" range from the AI.
 2. **Critical values use fixed templates.** No AI free text.
 3. **No diagnosis.** Use "may be linked to… discuss with your doctor", never "you have…".
@@ -377,7 +489,7 @@ AuditLog          (id, actor, action, entity, entity_id, timestamp, ip)
 6. **Always point back to the doctor.**
 7. **Every explanation is logged** with model version, template version and reviewer.
 
-### 10.2 Example critical-value thresholds
+### 11.2 Example critical-value thresholds
 ⚠️ These are **examples only**, based on commonly used lab critical lists. Your pathologist advisors must set and approve the real values, and each lab can configure its own.
 
 | Test | Critical low (example) | Critical high (example) |
@@ -390,7 +502,7 @@ AuditLog          (id, actor, action, entity, entity_id, timestamp, ip)
 | Sodium | < 120 mmol/L | > 160 mmol/L |
 | Creatinine | — | Lab/clinician-defined (e.g., sudden large rise) |
 
-### 10.3 Clinical governance
+### 11.3 Clinical governance
 - **Clinical advisory board:** at least 1 internal medicine specialist and 1 pathologist. Later add an endocrinologist and a pediatrician.
 - Advisors **review and sign off** every per-test template in Bangla and English.
 - **Monthly review** of a random sample of explanations, plus all complaints.
@@ -399,9 +511,9 @@ AuditLog          (id, actor, action, entity, entity_id, timestamp, ip)
 
 ---
 
-## 11. Regulation & compliance
+## 12. Regulation & compliance
 
-### 11.1 Bangladesh
+### 12.1 Bangladesh
 > ⚠️ Verify the current status with a lawyer. Several laws were issued as **ordinances** in 2025 and may be revised by a future parliament.
 
 | Area | Regulator / law | What it means for you |
@@ -415,7 +527,7 @@ AuditLog          (id, actor, action, entity, entity_id, timestamp, ip)
 | **Company & tax** | RJSC, NBR (VAT/TIN), trade license; BASIS membership helpful | Register a company, issue VAT-compliant invoices to B2B clients, and check ICT/software tax incentives. |
 | **Messaging** | BTRC (SMS), Meta's WhatsApp Business policies | Use approved message templates and opt-in. No marketing without consent. |
 
-### 11.2 International standards (credibility + future expansion)
+### 12.2 International standards (credibility + future expansion)
 | Standard / framework | Relevance | When |
 |---|---|---|
 | **GDPR** (EU) | Gold standard for privacy. Health data is a special category. | Design to it now |
@@ -434,14 +546,14 @@ AuditLog          (id, actor, action, entity, entity_id, timestamp, ip)
 | **WCAG 2.1 AA** | Accessibility | MVP |
 | **WHO: Ethics & governance of AI for health (2021)** and **guidance on large multi-modal models (2024)** | Ethical principles: transparency, human oversight, safety | Cite in policy and pitches |
 
-### 11.3 Regulatory positioning statement (use in terms of service and pitches)
+### 12.3 Regulatory positioning statement (use in terms of service and pitches)
 > "LabExplain (working name) provides **educational, plain-language explanations** of laboratory results issued by licensed laboratories. It does **not** diagnose, treat or recommend medication. All results remain the responsibility of the issuing laboratory and the patient's treating physician."
 
 ---
 
-## 12. Security & privacy
+## 13. Security & privacy
 
-### 12.1 Technical controls
+### 13.1 Technical controls
 - TLS 1.2+ in transit, AES-256 at rest, encrypted backups
 - OTP verification before showing a report, and expiring links (for example, 7–30 days)
 - Role-based access control, with staff seeing only their own organisation's data
@@ -452,13 +564,13 @@ AuditLog          (id, actor, action, entity, entity_id, timestamp, ip)
 - Regular vulnerability scans, an annual penetration test, and a dependency update policy
 - An incident response plan with a breach-notification procedure
 
-### 12.2 Patient rights
+### 13.2 Patient rights
 - Clear Bangla/English consent screen
 - Right to view, download and **delete** their data
 - Right to opt out of trend tracking or storage
 - Contact point for privacy questions (a Data Protection Officer once you're large enough)
 
-### 12.3 Documents to prepare
+### 13.3 Documents to prepare
 - [ ] Privacy policy (Bangla + English)
 - [ ] Terms of service with the medical disclaimer
 - [ ] Data processing agreement with each lab or clinic
@@ -469,11 +581,11 @@ AuditLog          (id, actor, action, entity, entity_id, timestamp, ip)
 
 ---
 
-## 13. Business model & pricing
+## 14. Business model & pricing
 
 > Prices are **indicative**. Validate them with real customers. 1 USD ≈ ৳120 (check the current rate).
 
-### 13.1 Pricing table
+### 14.1 Pricing table
 | Plan | Customer | Price (indicative) | Includes |
 |---|---|---|---|
 | **Starter** | Small clinic / chamber | ৳2,000–3,000 / month | Up to ~300 reports, branding, WhatsApp/SMS link |
@@ -482,7 +594,7 @@ AuditLog          (id, actor, action, entity, entity_id, timestamp, ip)
 | **Patient direct** (later) | Individuals | ৳30–100 / report or ৳199–499 / month family plan | Self-upload, history, trends |
 | **Diaspora plan** (later) | Bangladeshis abroad | $3–5 / month | Parents' reports, trends, alerts |
 
-### 13.2 Extra revenue options
+### 14.2 Extra revenue options
 - One-time **setup / integration fee** (৳20,000–2,00,000)
 - **White-label** licensing to health-tech companies and insurers
 - **Corporate health check-up** packages
@@ -490,7 +602,7 @@ AuditLog          (id, actor, action, entity, entity_id, timestamp, ip)
 
 ---
 
-## 14. Unit economics
+## 15. Unit economics
 Illustrative estimates only. Measure real costs during the pilot.
 
 | Cost item per report | Estimate |
@@ -512,7 +624,7 @@ Illustrative estimates only. Measure real costs during the pilot.
 
 ---
 
-## 15. Go-to-market plan
+## 16. Go-to-market plan
 
 ### Phase 0: Validation (weeks 1–4)
 - [ ] Interview 10 diagnostic center managers, 10 doctors and 20 patients
@@ -547,7 +659,7 @@ Illustrative estimates only. Measure real costs during the pilot.
 
 ---
 
-## 16. Competition & moat
+## 17. Competition & moat
 
 ### Competition
 - **Generic AI chatbots:** patients paste reports into free chatbots. These have no lab range awareness, no Bangla quality control, no branding, and privacy concerns.
@@ -565,7 +677,7 @@ Illustrative estimates only. Measure real costs during the pilot.
 
 ---
 
-## 17. Roadmap
+## 18. Roadmap
 
 | Timeline | Milestone |
 |---|---|
@@ -579,7 +691,7 @@ Illustrative estimates only. Measure real costs during the pilot.
 
 ---
 
-## 18. Team & budget
+## 19. Team & budget
 
 ### Minimum team
 | Role | Type |
@@ -605,7 +717,7 @@ Possible funding: bootstrapping, the Startup Bangladesh fund, local angel networ
 
 ---
 
-## 19. Metrics (KPIs)
+## 20. Metrics (KPIs)
 
 | Category | Metric |
 |---|---|
@@ -618,7 +730,7 @@ Possible funding: bootstrapping, the Startup Bangladesh fund, local angel networ
 
 ---
 
-## 20. Risks & mitigations
+## 21. Risks & mitigations
 
 | Risk | Impact | Mitigation |
 |---|---|---|
@@ -634,7 +746,7 @@ Possible funding: bootstrapping, the Startup Bangladesh fund, local angel networ
 
 ---
 
-## 21. Pitch for diagnostic centers
+## 22. Pitch for diagnostic centers
 
 > **"Give every patient a report they can understand, in Bangla, with your brand."**
 >
@@ -647,13 +759,14 @@ Possible funding: bootstrapping, the Startup Bangladesh fund, local angel networ
 
 ---
 
-## 22. Next steps checklist
+## 23. Next steps checklist
 
 - [ ] Choose a product name and check domain and trademark (e.g., *LabSohoj*, *ReportBuzhun*, *Sohoj Report*)
 - [ ] Interview 10 labs, 10 doctors and 20 patients
 - [ ] Collect 50–100 anonymised sample reports from at least 5 different labs
 - [ ] Recruit clinical advisors and sign advisor agreements
 - [ ] Get a legal opinion (data protection, DGDA, terms of service)
+- [ ] Build the evaluation set: hand-check the correct values for the sample reports (§9.3)
 - [ ] Build the test catalog (LOINC mapping, Bangla/English descriptions)
 - [ ] Build the MVP pipeline (§8)
 - [ ] Write and get approval for the per-test explanation templates
